@@ -23,34 +23,34 @@ pipeline {
 
         stage('Test') {
             steps {
-                bat 'pip install pytest httpx fastapi --quiet'
-                bat 'if exist tests\\ (pytest tests/ -v --tb=short) else (echo No tests folder, skipping)'
+                sh 'pip install pytest httpx fastapi --quiet'
+                sh 'if [ -d tests ]; then pytest tests/ -v --tb=short; else echo "No tests folder, skipping"; fi'
             }
         }
 
         stage('Docker Build') {
             steps {
-                bat "docker build -t %ACR_LOGIN_SERVER%/%IMAGE_NAME%:latest ."
+                sh "docker build -t ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest ."
             }
         }
 
         stage('Docker Push') {
             steps {
-                bat "az login --service-principal -u %AZURE_CLIENT_ID% -p %AZURE_CLIENT_SECRET% --tenant %AZURE_TENANT_ID%"
-                bat "az acr login --name %ACR_NAME%"
-                bat "docker push %ACR_LOGIN_SERVER%/%IMAGE_NAME%:latest"
+                sh "az login --service-principal -u ${AZURE_CLIENT_ID} -p ${AZURE_CLIENT_SECRET} --tenant ${AZURE_TENANT_ID}"
+                sh "az acr login --name ${ACR_NAME}"
+                sh "docker push ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest"
             }
         }
 
         stage('Deploy to Azure') {
             steps {
-                bat "az containerapp update --name %CONTAINER_APP_NAME% --resource-group %RESOURCE_GROUP% --image %ACR_LOGIN_SERVER%/%IMAGE_NAME%:latest"
+                sh "az containerapp update --name ${CONTAINER_APP_NAME} --resource-group ${RESOURCE_GROUP} --image ${ACR_LOGIN_SERVER}/${IMAGE_NAME}:latest"
             }
         }
 
         stage('Smoke Test') {
             steps {
-                bat 'curl -f https://scholarai-backend.salmonforest-301059c3.centralindia.azurecontainerapps.io/'
+                sh 'curl -f https://scholarai-backend.salmonforest-301059c3.centralindia.azurecontainerapps.io/'
             }
         }
     }

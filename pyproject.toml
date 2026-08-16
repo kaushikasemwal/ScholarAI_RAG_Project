@@ -1,0 +1,138 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scholarai"
+version = "1.0.0"
+description = "AI-powered Study Assistant — ML Pipeline Backend"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Kaushika Semwal", email = "kaushika@example.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # Web Framework
+    "fastapi>=0.104.0,<0.115",
+    "uvicorn[standard]>=0.24.0,<0.31",
+    "python-multipart>=0.0.6,<1",
+    "slowapi>=0.1.9,<1",
+
+    # ML Core
+    "torch==2.2.0; sys_platform != 'win32'",
+    "torch==2.2.0+cpu; sys_platform == 'win32'",
+    "transformers>=4.35.0,<4.45",
+    "sentence-transformers>=2.2.2,<3",
+    "sentencepiece>=0.1.99,<1",
+    "accelerate>=0.24.0,<1",
+    "scikit-learn>=1.3.0,<1.6",
+
+    # NLP
+    "nltk>=3.8.1,<4",
+    "spacy>=3.7.0,<4",
+
+    # Document Parsing
+    "pymupdf>=1.23.0,<2",
+    "pdfplumber>=0.10.0,<1",
+    "PyPDF2>=3.0.0,<4",
+    "python-pptx>=0.6.21,<1",
+
+    # Audio / Video
+    "gTTS>=2.4.0,<3",
+    "moviepy>=1.0.3,<2",
+    "imageio-ffmpeg>=0.4.9,<1",
+    "Pillow>=10.0.0,<11",
+
+    # Security
+    "cryptography>=41.0.0,<43",
+    "firebase-admin>=6.2.0,<7",
+
+    # Utilities
+    "numpy>=1.24.0,<2",
+    "python-dotenv>=1.0.0,<2",
+    "aiofiles>=23.2.0,<24",
+    "pydantic>=2.4.0,<3",
+    "pydantic-settings>=2.0.0,<3",
+    "psutil>=5.9.0,<6",
+
+    # Storage
+    "aiobotocore>=2.16.0,<3",  # S3
+    "google-cloud-storage>=2.18.0,<3",  # GCS
+
+    # Rate Limiting
+    "redis>=5.0.0,<6",
+
+    # Evaluation
+    "rouge-score>=0.1.2,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0,<8",
+    "pytest-asyncio>=0.21.0,<1",
+    "httpx>=0.25.0,<1",
+    "ruff>=0.1.0,<1",
+    "mypy>=1.5.0,<2",
+    "pre-commit>=3.5.0,<4",
+]
+docs = [
+    "mkdocs>=1.5.0,<2",
+    "mkdocs-material>=9.0.0,<10",
+]
+
+[project.urls]
+Homepage = "https://github.com/kaushikasemwal/ScholarAI_Project"
+Repository = "https://github.com/kaushikasemwal/ScholarAI_Project"
+Issues = "https://github.com/kaushikasemwal/ScholarAI_Project/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = ["E", "F", "I", "UP", "W", "C4", "PT", "PI", "TRY", "SIM", "TID", "ARG", "PTH"]
+ignore = ["S101", "S311", "S603", "S607", "PTH207"]
+exclude = [".venv", "venv", "__pycache__", ".pytest_cache", "build", "dist", "*.egg-info", ".git", "outputs", "uploads", "models"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = true
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = ["venv", ".venv", "__pycache__", ".pytest_cache", "build", "dist", "*.egg-info", ".git"]
+
+[tool.coverage.run]
+source = ["backend"]
+omit = ["tests/*", "*/conftest.py"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "def __repr__", "raise AssertionError", "raise NotImplementedError"]
+show_missing = true
+skip_covered = true

@@ -106,8 +106,12 @@ class SemanticAutoencoder:
             log.warning("PyTorch not available. PCA fallback will be used.")
 
     # ─── WEIGHTS ──────────────────────────────────────────────────
-    def try_load_weights(self):
-        """Load pre-trained weights if available."""
+    def try_load_weights(self, validate: bool = True):
+        """Load pre-trained weights if available.
+        
+        Args:
+            validate: If True, run a quick validation to ensure weights are trained (not random).
+        """
         if self.model is None: return
         if WEIGHTS_PATH.exists():
             try:
@@ -115,11 +119,59 @@ class SemanticAutoencoder:
                 self.model.load_state_dict(torch.load(WEIGHTS_PATH, map_location="cpu"))
                 self.model.eval()
                 log.info(f"Loaded autoencoder weights from {WEIGHTS_PATH}")
+                
+                if validate:
+                    self._validate_weights()
             except Exception as e:
                 log.warning(f"Could not load weights: {e}. Using random init.")
+                self._init_weights()
         else:
             log.info("No pre-trained weights found. Using random initialization.")
             if self.model: self.model.eval()
+    
+    def _validate_weights(self):
+        """Quick validation that weights produce reasonable reconstructions."""
+        if self.model is None:
+            return
+        try:
+            import torch
+            import torch.nn as nn
+            
+            # Create synthetic normalized embeddings (like BGE output)
+            with torch.no_grad():
+                test_emb = torch.randn(50, self.input_dim)
+                test_emb = nn.functional.normalize(test_emb, p=2, dim=1)
+                
+                self.model.eval()
+                recon, _ = self.model(test_emb)
+                mse = nn.functional.mse_loss(recon, test_emb).item()
+                cos_sim = nn.functional.cosine_similarity(recon, test_emb, dim=1).mean().item()
+                
+                # Random init typically gives MSE ~1.0 and cos_sim ~0.0
+                # Trained weights should give MSE < 0.1 and cos_sim > 0.5
+                if mse > 0.5 or cos_sim < 0.3:
+                    log.warning(f"Loaded weights may be undertrained (MSE={mse:.4f}, cos_sim={cos_sim:.4f}). "
+                                f"Consider retraining with: python -m backend.autoencoder --train-corpus <file>")
+                else:
+                    log.info(f"Weight validation passed: MSE={mse:.6f}, cos_sim={cos_sim:.4f}")
+        except Exception as e:
+            log.debug(f"Weight validation skipped: {e}")
+    
+    def _init_weights(self):
+        """Initialize weights with Xavier/Glorot initialization."""
+        if self.model is None:
+            return
+        try:
+            import torch.nn as nn
+            def init_layer(m):
+                if isinstance(m, nn.Linear):
+                    nn.init.xavier_uniform_(m.weight)
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+            self.model.apply(init_layer)
+            log.info("Autoencoder weights initialized with Xavier initialization")
+        except Exception as e:
+            log.warning(f"Weight initialization failed: {e}")
 
     def save_weights(self):
         if self.model is None: return
@@ -282,49 +334,173 @@ class SemanticAutoencoder:
                 f"pytorch={'available' if self.model else 'unavailable'})")
 
 
-# ─── TRAINING SCRIPT ────────────────────────────────────────────
-if __name__ == "__main__":
-    """
-    Train the autoencoder on a sample corpus.
-    Run: python backend/autoencoder.py
-    """
+# ─── TRAINING CLI ───────────────────────────────────────────────
+def _train_from_corpus_file(corpus_path: str, epochs: int = 50, lr: float = 1e-3, batch_size: int = 64):
+    """Train autoencoder on sentences extracted from a text file."""
     import logging
     logging.basicConfig(level=logging.INFO)
-
-    # Sample training sentences (replace with your corpus)
-    sample_sentences = [
-        "Machine learning is a subset of artificial intelligence.",
-        "Deep learning uses multi-layer neural networks.",
-        "Supervised learning requires labeled training data.",
-        "Unsupervised learning finds patterns without labels.",
-        "Transformers use self-attention mechanisms.",
-        "BERT is a bidirectional encoder representation.",
-        "GPT models are autoregressive language models.",
-        "Gradient descent optimizes model parameters.",
-        "Overfitting occurs when models memorize training data.",
-        "Regularization techniques prevent overfitting.",
-        "The vanishing gradient problem affects deep networks.",
-        "Convolutional networks excel at image recognition.",
-        "Recurrent networks handle sequential data.",
-        "Attention mechanisms improve sequence-to-sequence models.",
-        "Transfer learning leverages pre-trained representations.",
-        "Fine-tuning adapts pre-trained models to new tasks.",
-        "Autoencoders learn compressed data representations.",
-        "Variational autoencoders generate new data samples.",
-        "GANs use adversarial training for generation.",
-        "Reinforcement learning optimizes cumulative reward.",
-    ] * 20   # Repeat to create a small training corpus
-
+    
+    from pathlib import Path
+    path = Path(corpus_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Corpus file not found: {corpus_path}")
+    
+    # Extract sentences from file
+    import nltk
+    try:
+        nltk.data.find("tokenizers/punkt")
+    except LookupError:
+        nltk.download("punkt", quiet=True)
+    
+    text = path.read_text(encoding="utf-8")
+    sentences = nltk.sent_tokenize(text)
+    # Filter: keep sentences with 10-100 words
+    sentences = [s.strip() for s in sentences if 10 <= len(s.split()) <= 100]
+    
+    log.info(f"Loaded {len(sentences)} sentences from {corpus_path}")
+    if len(sentences) < 100:
+        log.warning(f"Small corpus ({len(sentences)} sentences). Consider adding more data.")
+    
     ae = SemanticAutoencoder(input_dim=384, latent_dim=128)
     print(f"Architecture: {ae}")
-    losses = ae.train_on_corpus(sample_sentences, epochs=30, lr=1e-3)
+    losses = ae.train_on_corpus(sentences, epochs=epochs, lr=lr, batch_size=batch_size)
     print(f"\nFinal training loss: {losses[-1]:.6f}")
-
+    
     # Evaluate
     from sentence_transformers import SentenceTransformer
     sbert = SentenceTransformer("all-MiniLM-L6-v2")
-    test_emb = sbert.encode(sample_sentences[:20], convert_to_numpy=True)
+    test_emb = sbert.encode(sentences[:min(100, len(sentences))], convert_to_numpy=True)
     metrics = ae.evaluate(test_emb)
     print("\nEvaluation Metrics:")
     for k, v in metrics.items():
         print(f"  {k}: {v}")
+    
+    return ae
+
+
+def _train_from_documents(doc_dir: str, epochs: int = 50, lr: float = 1e-3, batch_size: int = 64):
+    """Train autoencoder on all PDF/PPTX files in a directory."""
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    from pathlib import Path
+    from backend.utils import extract_text_pdf, extract_text_pptx
+    import nltk
+    
+    try:
+        nltk.data.find("tokenizers/punkt")
+    except LookupError:
+        nltk.download("punkt", quiet=True)
+    
+    path = Path(doc_dir)
+    if not path.exists():
+        raise FileNotFoundError(f"Directory not found: {doc_dir}")
+    
+    all_sentences = []
+    for file_path in path.rglob("*"):
+        if file_path.suffix.lower() in {".pdf", ".pptx", ".ppt"}:
+            try:
+                raw = file_path.read_bytes()
+                if file_path.suffix.lower() == ".pdf":
+                    text = extract_text_pdf(raw)
+                else:
+                    text = extract_text_pptx(raw)
+                
+                sentences = nltk.sent_tokenize(text)
+                sentences = [s.strip() for s in sentences if 10 <= len(s.split()) <= 100]
+                all_sentences.extend(sentences)
+                log.info(f"Extracted {len(sentences)} sentences from {file_path.name}")
+            except Exception as e:
+                log.warning(f"Failed to process {file_path}: {e}")
+    
+    log.info(f"Total sentences from documents: {len(all_sentences)}")
+    
+    ae = SemanticAutoencoder(input_dim=384, latent_dim=128)
+    print(f"Architecture: {ae}")
+    losses = ae.train_on_corpus(all_sentences, epochs=epochs, lr=lr, batch_size=batch_size)
+    print(f"\nFinal training loss: {losses[-1]:.6f}")
+    
+    from sentence_transformers import SentenceTransformer
+    sbert = SentenceTransformer("all-MiniLM-L6-v2")
+    test_emb = sbert.encode(all_sentences[:min(100, len(all_sentences))], convert_to_numpy=True)
+    metrics = ae.evaluate(test_emb)
+    print("\nEvaluation Metrics:")
+    for k, v in metrics.items():
+        print(f"  {k}: {v}")
+    
+    return ae
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+    
+    parser = argparse.ArgumentParser(description="Train SemanticAutoencoder")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    
+    # Train from text file
+    file_parser = subparsers.add_parser("train-corpus", help="Train on a text corpus file")
+    file_parser.add_argument("corpus_path", help="Path to text file (one sentence per line or full text)")
+    file_parser.add_argument("--epochs", type=int, default=50)
+    file_parser.add_argument("--lr", type=float, default=1e-3)
+    file_parser.add_argument("--batch-size", type=int, default=64)
+    
+    # Train from documents directory
+    doc_parser = subparsers.add_parser("train-docs", help="Train on PDF/PPTX files in a directory")
+    doc_parser.add_argument("doc_dir", help="Path to directory with documents")
+    doc_parser.add_argument("--epochs", type=int, default=50)
+    doc_parser.add_argument("--lr", type=float, default=1e-3)
+    doc_parser.add_argument("--batch-size", type=int, default=64)
+    
+    # Quick test (synthetic)
+    test_parser = subparsers.add_parser("quick-test", help="Quick synthetic training test")
+    test_parser.add_argument("--epochs", type=int, default=10)
+    
+    args = parser.parse_args()
+    
+    if args.command == "train-corpus":
+        _train_from_corpus_file(args.corpus_path, args.epochs, args.lr, args.batch_size)
+    elif args.command == "train-docs":
+        _train_from_documents(args.doc_dir, args.epochs, args.lr, args.batch_size)
+    elif args.command == "quick-test":
+        import logging
+        logging.basicConfig(level=logging.INFO)
+        
+        sample_sentences = [
+            "Machine learning is a subset of artificial intelligence.",
+            "Deep learning uses multi-layer neural networks.",
+            "Supervised learning requires labeled training data.",
+            "Unsupervised learning finds patterns without labels.",
+            "Transformers use self-attention mechanisms.",
+            "BERT is a bidirectional encoder representation.",
+            "GPT models are autoregressive language models.",
+            "Gradient descent optimizes model parameters.",
+            "Overfitting occurs when models memorize training data.",
+            "Regularization techniques prevent overfitting.",
+            "The vanishing gradient problem affects deep networks.",
+            "Convolutional networks excel at image recognition.",
+            "Recurrent networks handle sequential data.",
+            "Attention mechanisms improve sequence-to-sequence models.",
+            "Transfer learning leverages pre-trained representations.",
+            "Fine-tuning adapts pre-trained models to new tasks.",
+            "Autoencoders learn compressed data representations.",
+            "Variational autoencoders generate new data samples.",
+            "GANs use adversarial training for generation.",
+            "Reinforcement learning optimizes cumulative reward.",
+        ] * 20
+        
+        ae = SemanticAutoencoder(input_dim=384, latent_dim=128)
+        print(f"Architecture: {ae}")
+        losses = ae.train_on_corpus(sample_sentences, epochs=args.epochs, lr=1e-3)
+        print(f"\nFinal training loss: {losses[-1]:.6f}")
+        
+        from sentence_transformers import SentenceTransformer
+        sbert = SentenceTransformer("all-MiniLM-L6-v2")
+        test_emb = sbert.encode(sample_sentences[:20], convert_to_numpy=True)
+        metrics = ae.evaluate(test_emb)
+        print("\nEvaluation Metrics:")
+        for k, v in metrics.items():
+            print(f"  {k}: {v}")
+    else:
+        parser.print_help()
+        sys.exit(1)

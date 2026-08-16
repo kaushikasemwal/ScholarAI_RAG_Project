@@ -132,7 +132,18 @@ def _segment_summary(summary: str, sentences_per_slide: int = 3) -> List[Tuple[s
 
 # ─── VIDEO ASSEMBLY ─────────────────────────────────────────────
 
-def generate_video(summary: str, output_path: str) -> str:
+def generate_video(summary: str, output_path: str) -> tuple[str, dict]:
+    """
+    Generate video with metadata about the generation process.
+    
+    Returns:
+        tuple: (output_path, metadata_dict)
+        metadata_dict contains:
+            - status: "video_ok" | "slides_only" | "placeholder"
+            - message: Human-readable description
+            - slides_url: Path to slides ZIP if available
+    """
+    metadata = {"status": "placeholder", "message": "", "slides_url": None}
     try:
         # Point moviepy at the imageio-ffmpeg bundled binary so ffmpeg
         # doesn't need to be installed system-wide / in PATH.
@@ -221,19 +232,30 @@ def generate_video(summary: str, output_path: str) -> str:
             except Exception: pass
 
         log.info(f"Video saved → {output_path}")
-        return output_path
+        metadata["status"] = "video_ok"
+        metadata["message"] = "Video generated successfully"
+        return output_path, metadata
 
     except ImportError as e:
         log.warning(f"MoviePy/PIL not available: {e}. Writing slideshow fallback.")
-        return _write_slideshow_fallback(summary, output_path)
+        zip_path = _write_slideshow_fallback(summary, output_path)
+        metadata["status"] = "slides_only"
+        metadata["message"] = "MoviePy/PIL not available. Slides exported as ZIP."
+        metadata["slides_url"] = zip_path.replace(".mp4", "_slides.zip")
+        return output_path, metadata
     except Exception as e:
         log.error(f"Video generation failed: {e}", exc_info=True)
-        return _write_slideshow_fallback(summary, output_path)
+        zip_path = _write_slideshow_fallback(summary, output_path)
+        metadata["status"] = "slides_only"
+        metadata["message"] = f"Video generation failed: {e}. Slides exported as ZIP."
+        metadata["slides_url"] = zip_path.replace(".mp4", "_slides.zip")
+        return output_path, metadata
 
 
 # ─── FALLBACK: SLIDES ZIP ───────────────────────────────────────
 
 def _write_slideshow_fallback(summary: str, output_path: str) -> str:
+    """Returns the zip_path."""
     try:
         import io, zipfile
         from PIL import Image
@@ -250,7 +272,7 @@ def _write_slideshow_fallback(summary: str, output_path: str) -> str:
 
         log.info(f"Slideshow ZIP saved → {zip_path}")
         Path(output_path).write_text(f"[Slides exported as {zip_path}]")
-        return output_path
+        return zip_path
 
     except Exception:
         Path(output_path).write_text(

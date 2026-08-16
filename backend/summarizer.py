@@ -1,6 +1,6 @@
 """
 summarizer.py — Summarization Pipeline
-========================================
+======================================
 Pipeline:
   1. Split text into sentences (NLTK)
   2. Encode with Sentence-BERT (BAAI/bge-small-en-v1.5) → 384-dim embeddings
@@ -37,40 +37,8 @@ try:
 except LookupError:
     nltk.download("punkt_tab", quiet=True)
 
-# ─── LAZY MODEL LOADING ─────────────────────────────────────────
-_sbert_model  = None
-_pegasus_model = None
-_pegasus_tok   = None
-_autoencoder   = None
-
-
-def _load_sbert():
-    global _sbert_model
-    if _sbert_model is None:
-        from sentence_transformers import SentenceTransformer
-        log.info("Loading BGE-small embedding model…")
-        _sbert_model = SentenceTransformer("BAAI/bge-small-en-v1.5")
-    return _sbert_model
-
-
-def _load_pegasus():
-    global _pegasus_model, _pegasus_tok
-    if _pegasus_model is None:
-        from transformers import PegasusTokenizer, PegasusForConditionalGeneration
-        log.info("Loading Pegasus summarization model…")
-        _pegasus_tok   = PegasusTokenizer.from_pretrained("google/pegasus-xsum")
-        _pegasus_model = PegasusForConditionalGeneration.from_pretrained("google/pegasus-xsum")
-    return _pegasus_model, _pegasus_tok
-
-
-def _load_autoencoder(input_dim: int = 384):
-    global _autoencoder
-    if _autoencoder is None:
-        from .autoencoder import SemanticAutoencoder
-        ae = SemanticAutoencoder(input_dim=input_dim, latent_dim=128)
-        ae.try_load_weights()
-        _autoencoder = ae
-    return _autoencoder
+# Import from centralized model manager
+from .models import get_sbert, get_pegasus, get_autoencoder
 
 
 # ─── PIPELINE STEPS ─────────────────────────────────────────────
@@ -85,7 +53,7 @@ def preprocess_text(text: str, max_sentences: int = 80) -> List[str]:
 
 
 def embed_sentences(sentences: List[str]) -> np.ndarray:
-    model = _load_sbert()
+    model = get_sbert()
     # BGE models benefit from a query prefix for retrieval tasks
     embeddings = model.encode(
         sentences, batch_size=32,
@@ -98,7 +66,7 @@ def embed_sentences(sentences: List[str]) -> np.ndarray:
 
 
 def compress_embeddings(embeddings: np.ndarray) -> np.ndarray:
-    ae = _load_autoencoder(input_dim=embeddings.shape[1])
+    ae = get_autoencoder(input_dim=embeddings.shape[1])
     compressed = ae.encode(embeddings)
     log.info(f"Autoencoder: compressed to {compressed.shape}")
     return compressed
@@ -116,7 +84,7 @@ def select_key_sentences(sentences: List[str],
 def abstractive_summary(context: str,
                          max_length: int = 256,
                          min_length: int = 80) -> str:
-    model, tok = _load_pegasus()
+    model, tok = get_pegasus()
     inputs = tok(context, return_tensors="pt",
                  max_length=1024, truncation=True)
     summary_ids = model.generate(
@@ -131,25 +99,43 @@ def abstractive_summary(context: str,
     return tok.decode(summary_ids[0], skip_special_tokens=True)
 
 
-def generate_summary(text: str) -> str:
+def generate_summary(text: str) -> tuple[str, dict]:
+    """
+    Generate summary with metadata about the generation process.
+    
+    Returns:
+        tuple: (summary_text, metadata_dict)
+        metadata_dict contains:
+            - fallback_used: bool
+            - fallback_reason: str (if fallback_used)
+            - model_used: str
+    """
+    metadata = {"fallback_used": False, "fallback_reason": None, "model_used": "pegasus"}
+    
     if not text or len(text.strip()) < 50:
-        return "Insufficient text content found in document."
+        return "Insufficient text content found in document.", metadata
     try:
         sentences  = preprocess_text(text, max_sentences=80)
         if not sentences:
-            return "Could not extract readable sentences from document."
+            return "Could not extract readable sentences from document.", metadata
         embeddings = embed_sentences(sentences)
         compressed = compress_embeddings(embeddings)
         context    = select_key_sentences(sentences, compressed, top_k=15)
         summary    = abstractive_summary(context)
         log.info(f"Summary generated: {len(summary)} chars")
-        return summary
+        return summary, metadata
     except ImportError as e:
         log.warning(f"ML libraries missing, using extractive fallback: {e}")
-        return extractive_fallback(text)
+        metadata["fallback_used"] = True
+        metadata["fallback_reason"] = f"ML libraries unavailable: {e}"
+        metadata["model_used"] = "extractive_tfidf"
+        return extractive_fallback(text), metadata
     except Exception as e:
         log.error(f"Summary pipeline error: {e}", exc_info=True)
-        return extractive_fallback(text)
+        metadata["fallback_used"] = True
+        metadata["fallback_reason"] = f"Pipeline error: {e}"
+        metadata["model_used"] = "extractive_tfidf"
+        return extractive_fallback(text), metadata
 
 
 def extractive_fallback(text: str, n_sentences: int = 5) -> str:

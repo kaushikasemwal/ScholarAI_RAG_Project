@@ -34,21 +34,8 @@ for resource in ["punkt", "punkt_tab", "stopwords"]:
         except Exception:
             pass
 
-# ─── LAZY MODEL LOADING ─────────────────────────────────────────
-_t5_model = None
-_t5_tok   = None
-
-
-def _load_t5():
-    global _t5_model, _t5_tok
-    if _t5_model is None:
-        from transformers import T5ForConditionalGeneration, T5Tokenizer
-        log.info("Loading T5 question generation model…")
-        model_name = "valhalla/t5-base-qg-hl"
-        _t5_tok   = T5Tokenizer.from_pretrained(model_name)
-        _t5_model = T5ForConditionalGeneration.from_pretrained(model_name)
-        log.info("T5 QG model loaded.")
-    return _t5_model, _t5_tok
+# Import from centralized model manager
+from .models import get_sbert, get_t5
 
 
 # ─── TEXT CHUNKING ───────────────────────────────────────────────
@@ -95,18 +82,40 @@ def _extract_keywords(text: str, n: int = 10) -> List[str]:
 def _generate_distractors(correct: str, context: str, n: int = 3) -> List[str]:
     """
     Generate plausible wrong answers from the same context chunk.
-    Uses keyword extraction to find semantically related but incorrect options.
+    Uses keyword extraction and BGE embeddings to find semantically related 
+    but incorrect options (cosine similarity 0.3-0.7 = good distractors).
     """
-    keywords = _extract_keywords(context, n=15)
+    keywords = _extract_keywords(context, n=20)
+    
     # Filter out keywords too similar to the correct answer
-    distractors = [
+    candidate_distractors = [
         kw.title() for kw in keywords
         if kw.lower() not in correct.lower()
         and correct.lower() not in kw.lower()
         and len(kw) > 3
     ]
-    random.shuffle(distractors)
-    distractors = distractors[:n]
+    
+    # If we have SBERT available, use embeddings to find good distractors
+    # Good distractors should be semantically related but not identical (cosine 0.3-0.7)
+    try:
+        model = get_sbert()
+        correct_emb = model.encode([correct], convert_to_numpy=True, normalize_embeddings=True)
+        
+        scored_distractors = []
+        for d in candidate_distractors:
+            dist_emb = model.encode([d], convert_to_numpy=True, normalize_embeddings=True)
+            cos_sim = float(np.dot(correct_emb[0], dist_emb[0]))
+            # Good distractor: related but not too similar (0.3-0.7)
+            if 0.3 <= cos_sim <= 0.7:
+                scored_distractors.append((cos_sim, d))
+        
+        # Sort by similarity (closer to 0.5 is better)
+        scored_distractors.sort(key=lambda x: abs(x[0] - 0.5))
+        distractors = [d for _, d in scored_distractors[:n]]
+    except Exception:
+        # Fallback: random selection
+        random.shuffle(candidate_distractors)
+        distractors = candidate_distractors[:n]
 
     # Pad with generic placeholders if not enough distractors
     placeholders = [
@@ -139,7 +148,7 @@ def _generate_reasoning(question: str, correct: str, context: str) -> str:
 def _t5_generate_questions(chunks: List[str]) -> List[Dict]:
     """Use T5 to generate questions from text chunks."""
     try:
-        model, tok = _load_t5()
+        model, tok = get_t5()
         qa_pairs = []
 
         for chunk in chunks:
@@ -269,8 +278,7 @@ def _diversify(qa_pairs: List[Dict], n: int = 10) -> List[Dict]:
     if len(qa_pairs) <= n:
         return qa_pairs
     try:
-        from sentence_transformers import SentenceTransformer
-        model  = SentenceTransformer("BAAI/bge-small-en-v1.5")
+        model = get_sbert()  # Use shared SBERT instance
         qs     = [p["question"] for p in qa_pairs]
         embeds = model.encode(qs, convert_to_numpy=True, normalize_embeddings=True)
 

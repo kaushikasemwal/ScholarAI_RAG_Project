@@ -6,171 +6,486 @@
 
 import { auth, db } from "./firebase-config.js";
 import {
-  onAuthStateChanged, signOut
-} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import {
   collection, addDoc, getDocs, updateDoc,
   query, where, orderBy, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-const API_BASE = "https://kaushikasemwal-scholarai-backend.hf.space";
+import {
+  initAuthGuard, showUserInfo, createSignOutHandler
+} from "./shared/auth-guard.js";
+import { showToast, showSuccess, showError, showInfo, showWarning } from "./shared/toast.js";
+import { formatBytes, capitalize, delay, copyText, escapeHtml } from "./shared/utils.js";
+import { uploadFile, generateOutput, getApiBase, createJob, getJobStatus, listJobs, connectJobWebSocket } from "./shared/api.js";
+
+// ─── CONFIG ────────────────────────────────────────────────────────
+const API_BASE = getApiBase();
 
 // ─── STATE ────────────────────────────────────────────────────────
-let currentUser    = null;
+let currentUser = null;
 let uploadedFileId = null;
-let currentDocRef  = null;
-let currentFile    = null;
+let currentDocRef = null;
+let currentFile = null;
+let fileQueue = [];
+let activeGenerations = new Map(); // type -> { jobId, ws, progressCard }
 
 // ─── AUTH GUARD ───────────────────────────────────────────────────
-onAuthStateChanged(auth, async (user) => {
-  if (!user) { window.location.href = "login.html"; return; }
+initAuthGuard(auth, async (user) => {
   currentUser = user;
   showUserInfo(user);
   await loadHistory();
+  initTheme();
+  initKeyboardShortcuts();
 });
 
-function showUserInfo(user) {
-  const pill   = document.getElementById("userPill");
-  const avatar = document.getElementById("userAvatar");
-  const name   = document.getElementById("userName");
-  if (user.photoURL) avatar.src = user.photoURL;
-  else avatar.style.display = "none";
-  name.textContent = user.displayName || user.email.split("@")[0];
-  pill.style.display = "flex";
-  document.getElementById("signOutBtn").style.display = "inline-block";
-}
-
-window.handleSignOut = async function () {
-  await signOut(auth);
-  window.location.href = "login.html";
-};
+window.handleSignOut = createSignOutHandler(auth);
 
 // ─── DOM REFS ─────────────────────────────────────────────────────
-const dropZone  = document.getElementById("dropZone");
+const dropZone = document.getElementById("dropZone");
 const fileInput = document.getElementById("fileInput");
-const fileInfo  = document.getElementById("fileInfo");
-const fileName  = document.getElementById("fileName");
-const fileSize  = document.getElementById("fileSize");
+const fileInfo = document.getElementById("fileInfo");
+const fileName = document.getElementById("fileName");
+const fileSize = document.getElementById("fileSize");
+const viewNotesContainer = document.getElementById("viewNotesContainer");
+const generateGrid = document.querySelector(".generate-grid");
+
+// ─── THEME ────────────────────────────────────────────────────────
+function initTheme() {
+  // Check for saved theme or system preference
+  const savedTheme = localStorage.getItem("theme");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const theme = savedTheme || (prefersDark ? "dark" : "light");
+  document.documentElement.setAttribute("data-theme", theme);
+  
+  // Create theme toggle button in header
+  createThemeToggle();
+  
+  // Listen for system theme changes
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+    if (!localStorage.getItem("theme")) {
+      document.documentElement.setAttribute("data-theme", e.matches ? "dark" : "light");
+    }
+  });
+}
+
+function createThemeToggle() {
+  const headerRight = document.querySelector(".header-right");
+  if (!headerRight || document.getElementById("themeToggle")) return;
+  
+  const toggle = document.createElement("button");
+  toggle.id = "themeToggle";
+  toggle.className = "theme-toggle";
+  toggle.setAttribute("aria-label", "Toggle theme");
+  toggle.innerHTML = `
+    <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+  `;
+  toggle.addEventListener("click", () => {
+    const current = document.documentElement.getAttribute("data-theme");
+    const newTheme = current === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", newTheme);
+    localStorage.setItem("theme", newTheme);
+  });
+  
+  // Insert before sign out button
+  const signOutBtn = document.getElementById("signOutBtn");
+  headerRight.insertBefore(toggle, signOutBtn);
+}
+
+// ─── KEYBOARD SHORTCUTS ──────────────────────────────────────────
+function initKeyboardShortcuts() {
+  // Create shortcuts hint
+  const hint = document.createElement("div");
+  hint.className = "shortcuts-hint";
+  hint.innerHTML = `
+    <kbd>U</kbd> Upload  <kbd>Enter</kbd> Generate  <kbd>T</kbd> Theme  <kbd>?</kbd> Help
+  `;
+  document.body.appendChild(hint);
+  
+  document.addEventListener("keydown", (e) => {
+    // Ignore if typing in input
+    if (e.target.matches("input, textarea, [contenteditable]")) return;
+    
+    switch (e.key.toLowerCase()) {
+      case "u":
+        e.preventDefault();
+        fileInput?.click();
+        break;
+      case "enter":
+        if (uploadedFileId && !document.getElementById("btn-all").disabled) {
+          e.preventDefault();
+          window.generateAll();
+        }
+        break;
+      case "t":
+        e.preventDefault();
+        document.getElementById("themeToggle")?.click();
+        break;
+      case "?":
+      case "/":
+        e.preventDefault();
+        showShortcutsHelp();
+        break;
+      case "escape":
+        closeAllModals();
+        break;
+    }
+  });
+}
+
+function showShortcutsHelp() {
+  showInfo(`
+    <strong>Keyboard Shortcuts:</strong><br>
+    <kbd>U</kbd> - Upload file<br>
+    <kbd>Enter</kbd> - Generate All<br>
+    <kbd>T</kbd> - Toggle theme<br>
+    <kbd>?</kbd> / <kbd>/</kbd> - Show this help<br>
+    <kbd>Esc</kbd> - Close modals
+  `, 8000);
+}
+
+function closeAllModals() {
+  document.querySelectorAll(".quiz-modal-overlay").forEach(m => m.remove());
+}
 
 // ─── DRAG-AND-DROP ────────────────────────────────────────────────
 dropZone.addEventListener("dragover", (e) => {
-  e.preventDefault(); dropZone.classList.add("drag-over");
+  e.preventDefault(); 
+  dropZone.classList.add("drag-over");
 });
 dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
 dropZone.addEventListener("drop", (e) => {
-  e.preventDefault(); dropZone.classList.remove("drag-over");
-  if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
+  e.preventDefault(); 
+  dropZone.classList.remove("drag-over");
+  if (e.dataTransfer.files.length > 0) {
+    [...e.dataTransfer.files].forEach(f => handleFile(f));
+  }
 });
 dropZone.addEventListener("click", (e) => {
   if (e.target.classList.contains("btn-browse")) return;
   fileInput.click();
 });
 fileInput.addEventListener("change", () => {
-  if (fileInput.files.length > 0) handleFile(fileInput.files[0]);
+  if (fileInput.files.length > 0) {
+    [...fileInput.files].forEach(f => handleFile(f));
+  }
 });
 
-// ─── FILE HANDLING ────────────────────────────────────────────────
+// ─── FILE QUEUE ───────────────────────────────────────────────────
 function handleFile(file) {
   const ext = "." + file.name.split(".").pop().toLowerCase();
   if (![".pdf", ".pptx", ".ppt"].includes(ext)) {
-    showToast("Only PDF and PPTX files are supported.", "error"); return;
+    showError("Only PDF and PPTX files are supported."); 
+    return;
   }
-  currentFile = file;
-  fileName.textContent = file.name;
-  fileSize.textContent = formatBytes(file.size);
-  fileInfo.style.display = "flex";
-  uploadFile(file);
+  
+  // Add to queue
+  const queueItem = {
+    file,
+    id: crypto.randomUUID(),
+    status: "pending", // pending, uploading, completed, error
+    uploadedFileId: null
+  };
+  fileQueue.push(queueItem);
+  renderFileQueue();
+  
+  // Start upload if first in queue
+  if (fileQueue.filter(f => f.status === "pending" || f.status === "uploading").length === 1) {
+    processQueue();
+  }
+}
+
+function renderFileQueue() {
+  // Create queue container if not exists
+  let queueContainer = document.getElementById("fileQueue");
+  if (!queueContainer) {
+    queueContainer = document.createElement("div");
+    queueContainer.id = "fileQueue";
+    queueContainer.className = "file-queue";
+    fileInfo.parentNode.insertBefore(queueContainer, fileInfo.nextSibling);
+  }
+  
+  queueContainer.innerHTML = fileQueue.map(item => `
+    <div class="queue-item ${item.status}" data-id="${item.id}">
+      <span class="queue-icon">${getFileIcon(item.file.name)}</span>
+      <div class="queue-info">
+        <div class="queue-name">${escapeHtml(item.file.name)}</div>
+        <div class="queue-status">${getStatusText(item.status)}</div>
+        ${item.status === "uploading" ? `<div class="queue-progress skeleton"></div>` : ""}
+      </div>
+      <button class="queue-remove" onclick="removeFromQueue('${item.id}')" aria-label="Remove file">&times;</button>
+    </div>
+  `).join("");
+}
+
+function getFileIcon(filename) {
+  const ext = filename.split(".").pop().toLowerCase();
+  return ext === "pdf" ? "📄" : "📊";
+}
+
+function getStatusText(status) {
+  const texts = {
+    pending: "Waiting…",
+    uploading: "Uploading…",
+    completed: "Ready",
+    error: "Failed"
+  };
+  return texts[status] || status;
+}
+
+window.removeFromQueue = function(id) {
+  const index = fileQueue.findIndex(f => f.id === id);
+  if (index !== -1) {
+    fileQueue.splice(index, 1);
+    renderFileQueue();
+    // If current file was removed, clear main file info
+    if (currentFile && fileQueue.length === 0) {
+      clearFile();
+    }
+  }
+};
+
+async function processQueue() {
+  for (const item of fileQueue) {
+    if (item.status !== "pending") continue;
+    
+    item.status = "uploading";
+    renderFileQueue();
+    
+    try {
+      showToast(`Uploading ${item.file.name}…`);
+      const data = await uploadFile(item.file);
+      item.uploadedFileId = data.file_id;
+      item.status = "completed";
+      
+      // If this is the first successful upload, set as current
+      if (!currentFile) {
+        currentFile = item.file;
+        uploadedFileId = data.file_id;
+        fileName.textContent = item.file.name;
+        fileSize.textContent = formatBytes(item.file.size);
+        fileInfo.style.display = "flex";
+        
+        // Create Firestore session
+        currentDocRef = await addDoc(collection(db, "sessions"), {
+          uid: currentUser.uid,
+          fileId: data.file_id,
+          fileName: item.file.name,
+          fileSize: item.file.size,
+          createdAt: serverTimestamp(),
+          summary: null,
+          quiz: null,
+          audioB64: null,
+          videoUrl: null,
+        });
+      }
+      
+      showSuccess(`${item.file.name} uploaded securely.`);
+    } catch (err) {
+      item.status = "error";
+      showError(`Failed to upload ${item.file.name}.`);
+      console.error(err);
+    }
+    
+    renderFileQueue();
+    await delay(300);
+  }
 }
 
 window.clearFile = function () {
   currentFile = null; uploadedFileId = null; currentDocRef = null;
+  fileQueue = [];
   fileInfo.style.display = "none";
   fileInput.value = "";
   const banner = document.getElementById("viewNotesBtn");
   if (banner) banner.remove();
+  const queueContainer = document.getElementById("fileQueue");
+  if (queueContainer) queueContainer.remove();
 };
 
-function formatBytes(b) {
-  if (b < 1024) return b + " B";
-  if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
-  return (b / 1048576).toFixed(1) + " MB";
-}
-
-// ─── UPLOAD ──────────────────────────────────────────────────────
-async function uploadFile(file) {
-  const formData = new FormData();
-  formData.append("file", file);
-  try {
-    showToast("Uploading and encrypting…");
-    const resp = await fetch(`${API_BASE}/upload`, { method: "POST", body: formData });
-    if (!resp.ok) throw new Error("Upload failed: " + resp.status);
-    const data = await resp.json();
-    uploadedFileId = data.file_id;
-
-    currentDocRef = await addDoc(collection(db, "sessions"), {
-      uid:       currentUser.uid,
-      fileId:    data.file_id,
-      fileName:  file.name,
-      fileSize:  file.size,
-      createdAt: serverTimestamp(),
-      summary:   null,
-      quiz:      null,
-      audioB64:  null,
-      videoUrl:  null,
-    });
-
-    showToast("File uploaded securely.", "success");
-  } catch (err) {
-    showToast("Upload failed. Is the backend running?", "error");
-    console.error(err);
-  }
-}
-
-// ─── GENERATE ────────────────────────────────────────────────────
+// ─── GENERATION WITH WEBSOCKET PROGRESS ──────────────────────────
 window.generateOutput = async function (type) {
   if (!uploadedFileId) {
-    showToast("Please upload a document first.", "error"); return;
+    showError("Please upload a document first."); return;
   }
+  
   const btn = document.getElementById(`btn-${type}`);
   setButtonLoading(btn, true);
-
+  
+  // Create progress card
+  const progressCard = createProgressCard(type);
+  activeGenerations.set(type, { progressCard });
+  
   try {
-    const resp = await fetch(`${API_BASE}/generate/${type}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ file_id: uploadedFileId }),
+    // Create async job
+    const jobData = await createJob(type, uploadedFileId);
+    const jobId = jobData.job_id;
+    activeGenerations.get(type).jobId = jobId;
+    
+    // Connect WebSocket for real-time progress
+    const ws = connectJobWebSocket(jobId, (data) => {
+      updateProgressCard(type, data);
     });
-    if (!resp.ok) throw new Error(`${type} generation failed: ${resp.status}`);
-    const data = await resp.json();
-
-    // Save to Firestore — no inline rendering
-    await persistResult(type, data);
-    showToast(`${capitalize(type)} generated.`, "success");
-    showViewNotesBtn();
+    activeGenerations.get(type).ws = ws;
+    
+    // Poll for completion as fallback
+    pollJobCompletion(type, jobId);
+    
   } catch (err) {
-    showToast(`${capitalize(type)} failed. Check the backend logs.`, "error");
+    showError(`${capitalize(type)} failed to start.`);
     console.error(err);
+    removeProgressCard(type);
   } finally {
     setButtonLoading(btn, false);
   }
 };
 
+function createProgressCard(type) {
+  const card = document.createElement("div");
+  card.className = "gen-progress-card";
+  card.id = `progress-${type}`;
+  card.innerHTML = `
+    <div class="gen-progress-header">
+      <span class="gen-progress-icon">${getTypeIcon(type)}</span>
+      <span class="gen-progress-title">${capitalize(type)} Generation</span>
+      <span class="gen-progress-status pending">Pending</span>
+    </div>
+    <div class="gen-progress-bar">
+      <div class="gen-progress-fill"></div>
+    </div>
+    <div class="gen-progress-time">
+      <span>Elapsed: <span class="elapsed-time">0s</span></span>
+      <span class="eta">Estimating…</span>
+    </div>
+    <button class="gen-progress-cancel" onclick="cancelGeneration('${type}')">Cancel</button>
+  `;
+  
+  // Insert after generate grid
+  generateGrid.parentNode.insertBefore(card, generateGrid.nextSibling);
+  
+  const startTime = Date.now();
+  const elapsedInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const el = card.querySelector(".elapsed-time");
+    if (el) el.textContent = `${elapsed}s`;
+  }, 1000);
+  
+  card.dataset.elapsedInterval = elapsedInterval;
+  return card;
+}
+
+function getTypeIcon(type) {
+  const icons = { summary: "🧠", quiz: "❓", audio: "🔊", video: "🎬" };
+  return icons[type] || "⚙️";
+}
+
+function updateProgressCard(type, data) {
+  const card = document.getElementById(`progress-${type}`);
+  if (!card) return;
+  
+  const statusEl = card.querySelector(".gen-progress-status");
+  const fillEl = card.querySelector(".gen-progress-fill");
+  const etaEl = card.querySelector(".eta");
+  
+  if (data.progress !== undefined) {
+    fillEl.style.width = `${data.progress}%`;
+  }
+  
+  if (data.status) {
+    statusEl.textContent = capitalize(data.status);
+    statusEl.className = `gen-progress-status ${data.status}`;
+  }
+  
+  if (data.status === "completed" && data.result) {
+    clearInterval(card.dataset.elapsedInterval);
+    etaEl.textContent = "Done!";
+    
+    // Persist result
+    persistResult(type, data.result).then(() => {
+      showSuccess(`${capitalize(type)} generated.`);
+      showViewNotesBtn();
+    });
+    
+    // Auto-remove after delay
+    setTimeout(() => removeProgressCard(type), 3000);
+  } else if (data.status === "failed") {
+    clearInterval(card.dataset.elapsedInterval);
+    statusEl.textContent = "Failed";
+    statusEl.className = "gen-progress-status failed";
+    etaEl.textContent = data.error || "Unknown error";
+    showError(`${capitalize(type)} failed: ${data.error || "Unknown error"}`);
+  } else if (data.status === "running") {
+    // Estimate remaining time based on progress
+    const elapsed = (Date.now() - parseInt(card.dataset.startTime || Date.now())) / 1000;
+    if (data.progress > 5) {
+      const estimatedTotal = elapsed / (data.progress / 100);
+      const remaining = Math.max(0, estimatedTotal - elapsed);
+      etaEl.textContent = `~${Math.round(remaining)}s remaining`;
+    }
+  }
+}
+
+window.cancelGeneration = function(type) {
+  const gen = activeGenerations.get(type);
+  if (gen?.ws) {
+    gen.ws.close();
+  }
+  if (gen?.jobId) {
+    // Could implement job cancellation endpoint
+    showWarning(`${capitalize(type)} cancellation requested.`);
+  }
+  removeProgressCard(type);
+};
+
+function removeProgressCard(type) {
+  const card = document.getElementById(`progress-${type}`);
+  if (card) {
+    clearInterval(card.dataset.elapsedInterval);
+    card.remove();
+  }
+  activeGenerations.delete(type);
+}
+
+async function pollJobCompletion(type, jobId) {
+  // Fallback polling in case WebSocket fails
+  for (let i = 0; i < 120; i++) { // Max 2 minutes
+    await delay(1000);
+    try {
+      const status = await getJobStatus(jobId);
+      if (status.status === "completed" || status.status === "failed") {
+        updateProgressCard(type, {
+          progress: 100,
+          status: status.status,
+          result: status.result,
+          error: status.error
+        });
+        break;
+      }
+    } catch (err) {
+      console.warn("Poll failed:", err);
+    }
+  }
+}
+
+// ─── GENERATE ALL ─────────────────────────────────────────────────
 window.generateAll = async function () {
   if (!uploadedFileId) {
-    showToast("Please upload a document first.", "error"); return;
+    showError("Please upload a document first."); return;
   }
+  
   const btn = document.getElementById("btn-all");
-  btn.disabled = true; btn.textContent = "Generating…";
-
-  for (const type of ["summary", "quiz", "audio", "video"]) {
-    await window.generateOutput(type);
-    await delay(300);
-  }
-
-  btn.disabled = false; btn.textContent = "⚡ Generate All & Open Notes";
-
+  btn.disabled = true; 
+  btn.textContent = "Generating…";
+  
+  // Start all generations in parallel
+  const types = ["summary", "quiz", "audio", "video"];
+  const promises = types.map(type => window.generateOutput(type));
+  
+  await Promise.all(promises);
+  
+  btn.disabled = false; 
+  btn.textContent = "⚡ Generate All & Open Notes";
+  
   if (currentDocRef) {
-    showToast("All done! Opening your notes…", "success");
+    showSuccess("All done! Opening your notes…");
     await delay(800);
     window.location.href = `notes.html?id=${currentDocRef.id}`;
   }
@@ -179,7 +494,12 @@ window.generateAll = async function () {
 // ─── PERSIST TO FIRESTORE ────────────────────────────────────────
 async function persistResult(type, data) {
   if (type === "summary") {
-    await saveToFirestore({ summary: data.summary || "" });
+    await saveToFirestore({ 
+      summary: data.summary || "",
+      summaryFallbackUsed: data.fallback_used,
+      summaryFallbackReason: data.fallback_reason,
+      summaryModelUsed: data.model_used
+    });
   }
 
   if (type === "quiz" && data.questions) {
@@ -224,15 +544,15 @@ async function saveVideoAsBase64(url) {
     if (blob.size < 10_000) throw new Error("Video too small, likely failed");
     if (blob.size > 900_000) {
       await saveToFirestore({ videoUrl: url });
-      showToast("Video saved (temporary link).", "success");
+      showSuccess("Video saved (temporary link).");
       return;
     }
     const b64 = await blobToBase64(blob);
     await saveToFirestore({ videoUrl: b64 });
-    showToast("Video saved.", "success");
+    showSuccess("Video saved.");
   } catch (err) {
     console.warn("Could not save video:", err.message);
-    showToast("Video generated but could not be saved.", "error");
+    showError("Video generated but could not be saved.");
   }
 }
 
@@ -241,7 +561,7 @@ function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => resolve(reader.result);
-    reader.onerror  = reject;
+    reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
 }
@@ -277,46 +597,25 @@ async function loadHistory() {
 // ─── VIEW NOTES BANNER ───────────────────────────────────────────
 function showViewNotesBtn() {
   if (!currentDocRef || document.getElementById("viewNotesBtn")) return;
-  const container = document.getElementById("viewNotesContainer");
-  if (!container) return;
+  if (!viewNotesContainer) return;
   const div = document.createElement("div");
   div.id = "viewNotesBtn";
   div.className = "view-notes-banner";
   div.innerHTML = `
     <span>✅ Content saved to your account.</span>
     <a href="notes.html?id=${currentDocRef.id}" class="btn-view-notes">View Full Notes →</a>`;
-  container.appendChild(div);
+  viewNotesContainer.appendChild(div);
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────
 function setButtonLoading(btn, loading) {
   if (!btn) return;
   btn.disabled = loading;
-  const text    = btn.querySelector(".btn-text");
+  const text = btn.querySelector(".btn-text");
   const spinner = btn.querySelector(".btn-spinner");
-  if (text)    text.style.display    = loading ? "none"   : "inline";
+  if (text) text.style.display = loading ? "none" : "inline";
   if (spinner) spinner.style.display = loading ? "inline" : "none";
 }
 
-function showToast(msg, type = "") {
-  document.querySelectorAll(".toast").forEach(t => t.remove());
-  const t = document.createElement("div");
-  t.className = `toast ${type}`; t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 3500);
-}
-
-window.copyText = function (id) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  navigator.clipboard.writeText(el.innerText).then(() => showToast("Copied!", "success"));
-};
-
-function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
-function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
-function escapeHtml(str) {
-  if (!str) return "";
-  return String(str)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-}
+// Export copyText for global use
+window.copyText = (id) => copyText(id, showToast);

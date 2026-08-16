@@ -42,13 +42,17 @@ jobs:
           print('firebase-config.js written OK')
           PYEOF
 
-      - name: Set API base URL
+      - name: Set API base URL in meta tags
         env:
           HF_SPACE_URL: ${{ secrets.HF_SPACE_URL }}
         run: |
           if [ -n "$HF_SPACE_URL" ]; then
-            sed -i "s|http://localhost:8000|$HF_SPACE_URL|g" frontend/script.js
-            echo "API_BASE set to $HF_SPACE_URL"
+            for f in frontend/*.html; do
+              sed -i "s|<meta name=\"api-base\" content=\"\" />|<meta name=\"api-base\" content=\"$HF_SPACE_URL\" />|g" "$f"
+              echo "Updated API base in $f to $HF_SPACE_URL"
+            done
+          else
+            echo "HF_SPACE_URL not set, skipping meta tag injection"
           fi
 
       # Use JamesIves/github-pages-deploy-action which supports Node 24

@@ -18,37 +18,183 @@ Course: Advanced Topics in Machine Learning (HTML)
 import io
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# ─── ENCRYPTION KEY ─────────────────────────────────────────────
-# In production: store in env var / secrets manager
-_ENCRYPTION_KEY: Optional[bytes] = None
+# ─── ENCRYPTION KEY MANAGEMENT ──────────────────────────────────
+# Supports key rotation: maintains current + previous keys for decryption
+# File format: [key_version:1 byte][encrypted_data]
+# Key files: models/encryption.key (current), models/encryption.key.v{N} (previous)
+
+import io
+import logging
+import os
+import threading
+import time
+import base64
+import hashlib
+from pathlib import Path
+from typing import Optional, Dict, List
+
+log = logging.getLogger(__name__)
+
+# Key management
+_ENCRYPTION_KEYS: Dict[int, bytes] = {}  # version -> key
+_CURRENT_KEY_VERSION: int = 1
+_KEY_DIR = Path(__file__).parent.parent / "models"
+_KEY_LOCK = threading.Lock()
+_MAX_KEY_VERSIONS = 5  # Keep last 5 key versions for decryption
 
 
-def _get_key() -> bytes:
+def _get_key_file(version: int) -> Path:
+    """Get path for key file of given version."""
+    if version == 1:
+        return _KEY_DIR / "encryption.key"
+    return _KEY_DIR / f"encryption.key.v{version}"
+
+
+def _load_all_keys() -> Dict[int, bytes]:
+    """Load all available key versions from disk."""
+    keys = {}
+    # Check current key
+    current_file = _get_key_file(1)
+    if current_file.exists():
+        try:
+            key_data = current_file.read_bytes()
+            if len(key_data) == 32:
+                keys[1] = key_data
+        except Exception as e:
+            log.warning(f"Failed to load current key: {e}")
+    
+    # Check previous versions
+    for v in range(2, _MAX_KEY_VERSIONS + 1):
+        key_file = _get_key_file(v)
+        if key_file.exists():
+            try:
+                key_data = key_file.read_bytes()
+                if len(key_data) == 32:
+                    keys[v] = key_data
+            except Exception as e:
+                log.warning(f"Failed to load key v{v}: {e}")
+    
+    return keys
+
+
+def _get_key(version: Optional[int] = None) -> bytes:
     """
-    Get or generate the AES encryption key.
-    Reads from AES_KEY environment variable (base64 32-byte key) if set,
-    otherwise generates a random key for this session.
+    Get encryption key for given version (or current version).
+    Priority:
+    1. AES_KEY environment variable (base64 32-byte key) - version 1 only
+    2. Persisted key files
+    3. Generate new key and persist it (version 1 only)
     """
-    global _ENCRYPTION_KEY
-    if _ENCRYPTION_KEY is not None:
-        return _ENCRYPTION_KEY
+    global _ENCRYPTION_KEYS, _CURRENT_KEY_VERSION
+    
+    target_version = version or _CURRENT_KEY_VERSION
+    
+    with _KEY_LOCK:
+        # Load keys if not already loaded
+        if not _ENCRYPTION_KEYS:
+            _ENCRYPTION_KEYS = _load_all_keys()
+            if _ENCRYPTION_KEYS:
+                _CURRENT_KEY_VERSION = max(_ENCRYPTION_KEYS.keys())
+                log.info(f"Loaded {len(_ENCRYPTION_KEYS)} encryption key versions (current: v{_CURRENT_KEY_VERSION})")
+        
+        # Return requested version if available
+        if target_version in _ENCRYPTION_KEYS:
+            return _ENCRYPTION_KEYS[target_version]
+        
+        # For current version, try env var or generate new
+        if target_version == _CURRENT_KEY_VERSION or target_version == 1:
+            env_key = os.environ.get("AES_KEY")
+            if env_key:
+                key = base64.b64decode(env_key)
+                if len(key) == 32:
+                    _ENCRYPTION_KEYS[1] = key
+                    _persist_key(1, key)
+                    log.info("Loaded AES-256 key from environment variable.")
+                    return key
+            
+            # Generate new key
+            key = os.urandom(32)
+            _ENCRYPTION_KEYS[1] = key
+            _CURRENT_KEY_VERSION = 1
+            _persist_key(1, key)
+            log.info("Generated new AES-256 key (v1).")
+            return key
+        
+        raise ValueError(f"Encryption key version {target_version} not available")
 
-    env_key = os.environ.get("AES_KEY")
-    if env_key:
-        import base64
-        _ENCRYPTION_KEY = base64.b64decode(env_key)
-    else:
-        # Generate session key (new key each server restart — fine for demo)
-        _ENCRYPTION_KEY = os.urandom(32)
-        log.info("Generated new session AES-256 key.")
 
-    return _ENCRYPTION_KEY
+def _persist_key(version: int, key: bytes):
+    """Persist key to disk with proper permissions."""
+    try:
+        _KEY_DIR.mkdir(parents=True, exist_ok=True)
+        key_file = _get_key_file(version)
+        key_file.write_bytes(key)
+        key_file.chmod(0o600)
+    except Exception as e:
+        log.warning(f"Could not persist key v{version}: {e}")
+
+
+def rotate_encryption_key() -> int:
+    """
+    Rotate encryption key: current becomes previous, new key becomes current.
+    Returns new key version number.
+    
+    Old keys are retained for decryption of existing files.
+    """
+    global _ENCRYPTION_KEYS, _CURRENT_KEY_VERSION
+    
+    with _KEY_LOCK:
+        # Load existing keys if needed
+        if not _ENCRYPTION_KEYS:
+            _ENCRYPTION_KEYS = _load_all_keys()
+            if _ENCRYPTION_KEYS:
+                _CURRENT_KEY_VERSION = max(_ENCRYPTION_KEYS.keys())
+        
+        # Archive current key as previous version
+        new_version = _CURRENT_KEY_VERSION + 1
+        if new_version > _MAX_KEY_VERSIONS:
+            # Remove oldest version
+            oldest = new_version - _MAX_KEY_VERSIONS
+            old_file = _get_key_file(oldest)
+            if old_file.exists():
+                old_file.unlink()
+                log.info(f"Removed old key version v{oldest}")
+            _ENCRYPTION_KEYS.pop(oldest, None)
+        
+        # Move current to previous version
+        if _CURRENT_KEY_VERSION in _ENCRYPTION_KEYS:
+            _persist_key(new_version, _ENCRYPTION_KEYS[_CURRENT_KEY_VERSION])
+            _ENCRYPTION_KEYS[new_version] = _ENCRYPTION_KEYS[_CURRENT_KEY_VERSION]
+        
+        # Generate new current key
+        new_key = os.urandom(32)
+        _ENCRYPTION_KEYS[1] = new_key
+        _CURRENT_KEY_VERSION = 1
+        _persist_key(1, new_key)
+        
+        log.info(f"Rotated encryption key: v{new_version} archived, new current key v1")
+        return 1
+
+
+def get_key_versions() -> List[int]:
+    """Get list of available key versions."""
+    if not _ENCRYPTION_KEYS:
+        _load_all_keys()
+    return sorted(_ENCRYPTION_KEYS.keys())
+
+
+def get_current_key_version() -> int:
+    """Get current key version."""
+    if not _ENCRYPTION_KEYS:
+        _load_all_keys()
+    return _CURRENT_KEY_VERSION
 
 
 # ─── AES ENCRYPTION ─────────────────────────────────────────────
@@ -56,8 +202,11 @@ def _get_key() -> bytes:
 def encrypt_file(data: bytes) -> bytes:
     """
     Encrypt raw bytes with AES-256 (Fernet or PyCryptodome CBC).
-    Returns encrypted bytes including IV/nonce prefix.
+    Returns encrypted bytes with key version prefix: [version:1 byte][encrypted_data]
     """
+    current_version = get_current_key_version()
+    version_byte = current_version.to_bytes(1, "big")
+    
     try:
         from cryptography.fernet import Fernet
         import base64, hashlib
@@ -67,8 +216,8 @@ def encrypt_file(data: bytes) -> bytes:
         fernet_key = base64.urlsafe_b64encode(hashlib.sha256(raw_key).digest())
         f = Fernet(fernet_key)
         encrypted = f.encrypt(data)
-        log.debug(f"Encrypted {len(data)} bytes → {len(encrypted)} bytes (Fernet)")
-        return encrypted
+        log.debug(f"Encrypted {len(data)} bytes → {len(encrypted)} bytes (Fernet, v{current_version})")
+        return version_byte + encrypted
 
     except ImportError:
         pass  # Try PyCryptodome
@@ -82,26 +231,33 @@ def encrypt_file(data: bytes) -> bytes:
         cipher = AES.new(key, AES.MODE_CBC, iv)
         ct = cipher.encrypt(pad(data, AES.block_size))
         result = iv + ct
-        log.debug(f"Encrypted {len(data)} bytes → {len(result)} bytes (AES-CBC)")
-        return result
+        log.debug(f"Encrypted {len(data)} bytes → {len(result)} bytes (AES-CBC, v{current_version})")
+        return version_byte + result
 
     except ImportError:
         log.warning("No encryption library available (install cryptography or pycryptodome). Storing unencrypted.")
-        return data  # Fallback: no encryption (not for production!)
+        return version_byte + data  # Include version byte even for unencrypted fallback
 
 
 def decrypt_file(data: bytes) -> bytes:
     """
     Decrypt bytes previously encrypted with encrypt_file().
+    Handles key version prefix: [version:1 byte][encrypted_data]
     """
+    if len(data) < 2:
+        raise ValueError("Invalid encrypted data: too short")
+    
+    version = data[0]
+    encrypted_data = data[1:]
+    
     try:
         from cryptography.fernet import Fernet
         import base64, hashlib
 
-        raw_key    = _get_key()
+        raw_key = _get_key(version)
         fernet_key = base64.urlsafe_b64encode(hashlib.sha256(raw_key).digest())
         f = Fernet(fernet_key)
-        return f.decrypt(data)
+        return f.decrypt(encrypted_data)
 
     except ImportError:
         pass
@@ -110,18 +266,18 @@ def decrypt_file(data: bytes) -> bytes:
         from Crypto.Cipher import AES
         from Crypto.Util.Padding import unpad
 
-        key = _get_key()[:32]
-        iv  = data[:16]
-        ct  = data[16:]
+        key = _get_key(version)[:32]
+        iv  = encrypted_data[:16]
+        ct  = encrypted_data[16:]
         cipher = AES.new(key, AES.MODE_CBC, iv)
         return unpad(cipher.decrypt(ct), AES.block_size)
 
     except ImportError:
-        return data  # No decryption (matches encrypt fallback)
+        return encrypted_data  # No decryption (matches encrypt fallback)
 
     except Exception as e:
-        log.error(f"Decryption failed: {e}")
-        raise ValueError("Could not decrypt file. Session may have restarted.") from e
+        log.error(f"Decryption failed (v{version}): {e}")
+        raise ValueError(f"Could not decrypt file with key v{version}. Key may have been rotated.") from e
 
 
 # ─── TEXT EXTRACTION ────────────────────────────────────────────
@@ -259,3 +415,40 @@ def cleanup_old_files(directory: str, max_age_seconds: int = 3600):
                     log.warning(f"Could not delete {f}: {e}")
     if count > 0:
         log.info(f"Cleaned {count} old files from {directory}")
+
+
+# ─── KEY ROTATION CLI ────────────────────────────────────────────
+if __name__ == "__main__":
+    import argparse
+    import sys
+    
+    parser = argparse.ArgumentParser(description="Encryption key management")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    
+    # Rotate key
+    rotate_parser = subparsers.add_parser("rotate-key", help="Rotate encryption key (archive current, generate new)")
+    rotate_parser.add_argument("--force", action="store_true", help="Force rotation even if key is recent")
+    
+    # List keys
+    list_parser = subparsers.add_parser("list-keys", help="List available key versions")
+    
+    # Show current key version
+    current_parser = subparsers.add_parser("current-key", help="Show current key version")
+    
+    args = parser.parse_args()
+    
+    if args.command == "rotate-key":
+        new_version = rotate_encryption_key()
+        print(f"Key rotated successfully. New current key: v{new_version}")
+        print(f"Available versions: {get_key_versions()}")
+    elif args.command == "list-keys":
+        versions = get_key_versions()
+        current = get_current_key_version()
+        for v in versions:
+            marker = " (current)" if v == current else ""
+            print(f"  v{v}{marker}")
+    elif args.command == "current-key":
+        print(f"Current key version: v{get_current_key_version()}")
+    else:
+        parser.print_help()
+        sys.exit(1)
