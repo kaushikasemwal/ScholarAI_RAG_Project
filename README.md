@@ -12,7 +12,7 @@ pinned: false
 
 > Built by Kaushika Semwal
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-blue?style=flat-square&logo=github)](https://kaushikasemwal.github.io/ScholarAI_Project/login.html)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-GitHub%20Pages-blue?style=flat-square&logo=github)](https://kaushikasemwal.github.io/ScholarAI_Project/)
 [![Backend API](https://img.shields.io/badge/Backend%20API-Hugging%20Face%20Spaces-yellow?style=flat-square&logo=huggingface)](https://huggingface.co/spaces)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/kaushikasemwal/ScholarAI_Project/deploy.yml?style=flat-square&logo=github)](https://github.com/kaushikasemwal/ScholarAI_Project/actions)
@@ -68,7 +68,7 @@ All outputs are **saved to your account** via Firebase Firestore — no re-gener
 
 | Service | URL |
 |---|---|
-| **Frontend** | https://kaushikasemwal.github.io/ScholarAI_Project/login.html |
+| **Frontend** | https://kaushikasemwal.github.io/ScholarAI_Project/ |
 | **Backend API** | `https://your-hf-username-scholarai-backend.hf.space/docs` |
 | **API Health** | `https://your-hf-username-scholarai-backend.hf.space/health` |
 | **Metrics** | `https://your-hf-username-scholarai-backend.hf.space/metrics` |
