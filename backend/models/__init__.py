@@ -209,7 +209,7 @@ def register_default_models() -> ModelManager:
 def _load_sbert():
     """Load BGE sentence transformer (base or small based on config)."""
     from sentence_transformers import SentenceTransformer
-    from .config import get_settings
+    from ..config import get_settings
     settings = get_settings()
     
     if settings.MODEL_TIER == "speed":
@@ -224,7 +224,7 @@ def _load_sbert():
 def _load_pegasus():
     """Load BART-large-CNN tokenizer and model for summarization."""
     from transformers import BartTokenizer, BartForConditionalGeneration
-    from .config import get_settings
+    from ..config import get_settings
     settings = get_settings()
     
     if settings.MODEL_TIER == "speed":
@@ -241,7 +241,7 @@ def _load_pegasus():
 def _load_t5():
     """Load FLAN-T5 tokenizer and model for question generation."""
     from transformers import T5ForConditionalGeneration, T5Tokenizer
-    from .config import get_settings
+    from ..config import get_settings
     settings = get_settings()
     
     if settings.MODEL_TIER == "speed":
@@ -259,7 +259,7 @@ def _load_t5():
 def _load_autoencoder(input_dim: int = 768):
     """Load semantic autoencoder."""
     from .autoencoder import SemanticAutoencoder
-    from .config import get_settings
+    from ..config import get_settings
     settings = get_settings()
     latent_dim = settings.AUTOENCODER_LATENT_DIM
     ae = SemanticAutoencoder(input_dim=input_dim, latent_dim=latent_dim)
