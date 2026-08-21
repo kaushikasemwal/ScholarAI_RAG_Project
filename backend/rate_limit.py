@@ -4,9 +4,8 @@ rate_limit.py — Redis-backed Distributed Rate Limiting
 Redis-based rate limiter for multi-worker deployments.
 """
 
-import time
 import logging
-from typing import Optional, Tuple
+import time
 from dataclasses import dataclass
 
 import redis.asyncio as redis
@@ -22,12 +21,12 @@ class RateLimitResult:
     allowed: bool
     remaining: int
     reset_time: float
-    retry_after: Optional[float] = None
+    retry_after: float | None = None
 
 
 class RedisRateLimiter:
     """Redis-backed sliding window rate limiter."""
-    
+
     def __init__(
         self,
         redis_url: str = "redis://localhost:6379",
@@ -37,8 +36,8 @@ class RedisRateLimiter:
         self.redis_url = redis_url
         self.default_limit = default_limit
         self.default_window = default_window
-        self._client: Optional[redis.Redis] = None
-    
+        self._client: redis.Redis | None = None
+
     async def _get_client(self) -> redis.Redis:
         if self._client is None:
             self._client = redis.from_url(
@@ -47,17 +46,17 @@ class RedisRateLimiter:
                 decode_responses=True,
             )
         return self._client
-    
+
     def _make_key(self, identifier: str, endpoint: str) -> str:
         """Create Redis key for rate limit."""
         return f"ratelimit:{endpoint}:{identifier}"
-    
+
     async def check_limit(
         self,
         identifier: str,
         endpoint: str,
-        limit: Optional[int] = None,
-        window: Optional[int] = None,
+        limit: int | None = None,
+        window: int | None = None,
     ) -> RateLimitResult:
         """
         Check if request is within rate limit.
@@ -70,7 +69,7 @@ class RedisRateLimiter:
         window = window or self.default_window
         now = time.time()
         window_start = now - window
-        
+
         # Lua script for atomic sliding window check
         lua_script = """
         local key = KEYS[1]
@@ -100,7 +99,7 @@ class RedisRateLimiter:
             return {1, current + 1, now + window}
         end
         """
-        
+
         try:
             result = await client.eval(
                 lua_script,
@@ -111,15 +110,15 @@ class RedisRateLimiter:
                 limit,
                 window,
             )
-            
+
             allowed = bool(result[0])
             remaining = max(0, limit - int(result[1]))
             reset_time = float(result[2])
-            
+
             retry_after = None
             if not allowed:
                 retry_after = max(0, reset_time - now)
-            
+
             return RateLimitResult(
                 allowed=allowed,
                 remaining=remaining,
@@ -134,7 +133,7 @@ class RedisRateLimiter:
                 remaining=limit,
                 reset_time=now + window,
             )
-    
+
     async def close(self):
         """Close Redis connection."""
         if self._client:
@@ -143,7 +142,7 @@ class RedisRateLimiter:
 
 
 # Global rate limiter instance
-_rate_limiter: Optional[RedisRateLimiter] = None
+_rate_limiter: RedisRateLimiter | None = None
 
 
 def get_rate_limiter() -> RedisRateLimiter:
@@ -163,8 +162,8 @@ def get_rate_limiter() -> RedisRateLimiter:
 async def rate_limit_dependency(
     identifier: str,
     endpoint: str,
-    limit: Optional[int] = None,
-    window: Optional[int] = None,
+    limit: int | None = None,
+    window: int | None = None,
 ) -> RateLimitResult:
     """FastAPI dependency for rate limiting."""
     limiter = get_rate_limiter()

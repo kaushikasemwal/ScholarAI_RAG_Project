@@ -4,10 +4,10 @@ schemas.py — Pydantic Models for Request/Response Validation & OpenAPI Documen
 Centralized type-safe schemas for all API endpoints.
 """
 
-from typing import List, Optional, Literal, Union
-from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
+from typing import Literal, Union
 
+from pydantic import BaseModel, ConfigDict, Field
 
 # ─── ENUMS ────────────────────────────────────────────────────────
 
@@ -83,14 +83,14 @@ class QuizQuestion(BaseModel):
         }
     )
     question: str = Field(..., description="The question text", min_length=5)
-    options: List[str] = Field(
-        ..., 
+    options: list[str] = Field(
+        ...,
         description="Exactly 4 answer options (A, B, C, D)",
         min_length=4,
         max_length=4
     )
     correct: int = Field(
-        ..., 
+        ...,
         description="Index of correct option (0-3)",
         ge=0,
         le=3
@@ -117,7 +117,7 @@ class SummaryResponse(BaseModel):
     summary: str = Field(..., description="Generated abstractive summary", min_length=1)
     status: GenerationStatus = Field(..., description="Generation status")
     fallback_used: bool = Field(default=False, description="Whether extractive fallback was used")
-    fallback_reason: Optional[str] = Field(default=None, description="Reason for fallback if used")
+    fallback_reason: str | None = Field(default=None, description="Reason for fallback if used")
     model_used: str = Field(default="pegasus", description="Model used for generation")
 
 
@@ -146,7 +146,7 @@ class QuizResponse(BaseModel):
         }
     )
     file_id: str = Field(..., description="Source file identifier")
-    questions: List[QuizQuestion] = Field(..., description="List of MCQ questions", min_length=1)
+    questions: list[QuizQuestion] = Field(..., description="List of MCQ questions", min_length=1)
     status: GenerationStatus = Field(..., description="Generation status")
 
 
@@ -176,9 +176,9 @@ class AudioResponse(BaseModel):
         }
     )
     file_id: str = Field(..., description="Source file identifier")
-    audio_url: Optional[str] = Field(None, description="Playable audio URL (relative to API base)")
+    audio_url: str | None = Field(None, description="Playable audio URL (relative to API base)")
     status: GenerationStatus = Field(..., description="Generation status")
-    message: Optional[str] = Field(None, description="Error details if failed")
+    message: str | None = Field(None, description="Error details if failed")
 
 
 class VideoResponse(BaseModel):
@@ -217,10 +217,10 @@ class VideoResponse(BaseModel):
         }
     )
     file_id: str = Field(..., description="Source file identifier")
-    video_url: Optional[str] = Field(None, description="Playable video URL (relative to API base)")
+    video_url: str | None = Field(None, description="Playable video URL (relative to API base)")
     status: GenerationStatus = Field(..., description="Generation status")
-    slides_url: Optional[str] = Field(None, description="Slide images ZIP if video unavailable")
-    message: Optional[str] = Field(None, description="Error details or fallback info")
+    slides_url: str | None = Field(None, description="Slide images ZIP if video unavailable")
+    message: str | None = Field(None, description="Error details or fallback info")
 
 
 class MediaCheckResponse(BaseModel):
@@ -236,10 +236,10 @@ class MediaCheckResponse(BaseModel):
         }
     )
     exists: bool = Field(..., description="Whether file exists on disk")
-    size_bytes: Optional[int] = Field(None, description="File size in bytes")
-    is_likely_real_audio: Optional[bool] = Field(None, description="Heuristic: file > 500 bytes")
-    path: Optional[str] = Field(None, description="Absolute server path")
-    filename: Optional[str] = Field(None, description="Requested filename (if not found)")
+    size_bytes: int | None = Field(None, description="File size in bytes")
+    is_likely_real_audio: bool | None = Field(None, description="Heuristic: file > 500 bytes")
+    path: str | None = Field(None, description="Absolute server path")
+    filename: str | None = Field(None, description="Requested filename (if not found)")
 
 
 class CleanupResponse(BaseModel):
@@ -292,7 +292,7 @@ class ValidationErrorResponse(BaseModel):
             }
         }
     )
-    detail: List[dict] = Field(..., description="Validation error details")
+    detail: list[dict] = Field(..., description="Validation error details")
 
 
 # ─── UNION RESPONSES (for endpoints with multiple success shapes) ──
@@ -376,10 +376,10 @@ class JobStatusResponse(BaseModel):
     status: JobStatus = Field(..., description="Current job status")
     progress: int = Field(default=0, description="Progress percentage (0-100)", ge=0, le=100)
     created_at: float = Field(..., description="Job creation timestamp")
-    started_at: Optional[float] = Field(None, description="Job start timestamp")
-    completed_at: Optional[float] = Field(None, description="Job completion timestamp")
-    result: Optional[dict] = Field(None, description="Generation result (when completed)")
-    error: Optional[str] = Field(None, description="Error message (when failed)")
+    started_at: float | None = Field(None, description="Job start timestamp")
+    completed_at: float | None = Field(None, description="Job completion timestamp")
+    result: dict | None = Field(None, description="Generation result (when completed)")
+    error: str | None = Field(None, description="Error message (when failed)")
 
 
 # ─── TAGS FOR OPENAPI GROUPING ────────────────────────────────────

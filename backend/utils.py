@@ -21,7 +21,6 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -30,20 +29,13 @@ log = logging.getLogger(__name__)
 # File format: [key_version:1 byte][encrypted_data]
 # Key files: models/encryption.key (current), models/encryption.key.v{N} (previous)
 
-import io
-import logging
-import os
-import threading
-import time
 import base64
-import hashlib
-from pathlib import Path
-from typing import Optional, Dict, List
+import logging
 
 log = logging.getLogger(__name__)
 
 # Key management
-_ENCRYPTION_KEYS: Dict[int, bytes] = {}  # version -> key
+_ENCRYPTION_KEYS: dict[int, bytes] = {}  # version -> key
 _CURRENT_KEY_VERSION: int = 1
 _KEY_DIR = Path(__file__).parent.parent / "models"
 _KEY_LOCK = threading.Lock()
@@ -57,7 +49,7 @@ def _get_key_file(version: int) -> Path:
     return _KEY_DIR / f"encryption.key.v{version}"
 
 
-def _load_all_keys() -> Dict[int, bytes]:
+def _load_all_keys() -> dict[int, bytes]:
     """Load all available key versions from disk."""
     keys = {}
     # Check current key
@@ -69,7 +61,7 @@ def _load_all_keys() -> Dict[int, bytes]:
                 keys[1] = key_data
         except Exception as e:
             log.warning(f"Failed to load current key: {e}")
-    
+
     # Check previous versions
     for v in range(2, _MAX_KEY_VERSIONS + 1):
         key_file = _get_key_file(v)
@@ -80,11 +72,11 @@ def _load_all_keys() -> Dict[int, bytes]:
                     keys[v] = key_data
             except Exception as e:
                 log.warning(f"Failed to load key v{v}: {e}")
-    
+
     return keys
 
 
-def _get_key(version: Optional[int] = None) -> bytes:
+def _get_key(version: int | None = None) -> bytes:
     """
     Get encryption key for given version (or current version).
     Priority:
@@ -93,9 +85,9 @@ def _get_key(version: Optional[int] = None) -> bytes:
     3. Generate new key and persist it (version 1 only)
     """
     global _ENCRYPTION_KEYS, _CURRENT_KEY_VERSION
-    
+
     target_version = version or _CURRENT_KEY_VERSION
-    
+
     with _KEY_LOCK:
         # Load keys if not already loaded
         if not _ENCRYPTION_KEYS:
@@ -103,11 +95,11 @@ def _get_key(version: Optional[int] = None) -> bytes:
             if _ENCRYPTION_KEYS:
                 _CURRENT_KEY_VERSION = max(_ENCRYPTION_KEYS.keys())
                 log.info(f"Loaded {len(_ENCRYPTION_KEYS)} encryption key versions (current: v{_CURRENT_KEY_VERSION})")
-        
+
         # Return requested version if available
         if target_version in _ENCRYPTION_KEYS:
             return _ENCRYPTION_KEYS[target_version]
-        
+
         # For current version, try env var or generate new
         if target_version == _CURRENT_KEY_VERSION or target_version == 1:
             env_key = os.environ.get("AES_KEY")
@@ -118,7 +110,7 @@ def _get_key(version: Optional[int] = None) -> bytes:
                     _persist_key(1, key)
                     log.info("Loaded AES-256 key from environment variable.")
                     return key
-            
+
             # Generate new key
             key = os.urandom(32)
             _ENCRYPTION_KEYS[1] = key
@@ -126,7 +118,7 @@ def _get_key(version: Optional[int] = None) -> bytes:
             _persist_key(1, key)
             log.info("Generated new AES-256 key (v1).")
             return key
-        
+
         raise ValueError(f"Encryption key version {target_version} not available")
 
 
@@ -149,14 +141,14 @@ def rotate_encryption_key() -> int:
     Old keys are retained for decryption of existing files.
     """
     global _ENCRYPTION_KEYS, _CURRENT_KEY_VERSION
-    
+
     with _KEY_LOCK:
         # Load existing keys if needed
         if not _ENCRYPTION_KEYS:
             _ENCRYPTION_KEYS = _load_all_keys()
             if _ENCRYPTION_KEYS:
                 _CURRENT_KEY_VERSION = max(_ENCRYPTION_KEYS.keys())
-        
+
         # Archive current key as previous version
         new_version = _CURRENT_KEY_VERSION + 1
         if new_version > _MAX_KEY_VERSIONS:
@@ -167,23 +159,23 @@ def rotate_encryption_key() -> int:
                 old_file.unlink()
                 log.info(f"Removed old key version v{oldest}")
             _ENCRYPTION_KEYS.pop(oldest, None)
-        
+
         # Move current to previous version
         if _CURRENT_KEY_VERSION in _ENCRYPTION_KEYS:
             _persist_key(new_version, _ENCRYPTION_KEYS[_CURRENT_KEY_VERSION])
             _ENCRYPTION_KEYS[new_version] = _ENCRYPTION_KEYS[_CURRENT_KEY_VERSION]
-        
+
         # Generate new current key
         new_key = os.urandom(32)
         _ENCRYPTION_KEYS[1] = new_key
         _CURRENT_KEY_VERSION = 1
         _persist_key(1, new_key)
-        
+
         log.info(f"Rotated encryption key: v{new_version} archived, new current key v1")
         return 1
 
 
-def get_key_versions() -> List[int]:
+def get_key_versions() -> list[int]:
     """Get list of available key versions."""
     if not _ENCRYPTION_KEYS:
         _load_all_keys()
@@ -206,10 +198,12 @@ def encrypt_file(data: bytes) -> bytes:
     """
     current_version = get_current_key_version()
     version_byte = current_version.to_bytes(1, "big")
-    
+
     try:
+        import base64
+        import hashlib
+
         from cryptography.fernet import Fernet
-        import base64, hashlib
 
         # Derive a valid Fernet key (32 bytes → URL-safe base64)
         raw_key = _get_key()
@@ -246,13 +240,15 @@ def decrypt_file(data: bytes) -> bytes:
     """
     if len(data) < 2:
         raise ValueError("Invalid encrypted data: too short")
-    
+
     version = data[0]
     encrypted_data = data[1:]
-    
+
     try:
+        import base64
+        import hashlib
+
         from cryptography.fernet import Fernet
-        import base64, hashlib
 
         raw_key = _get_key(version)
         fernet_key = base64.urlsafe_b64encode(hashlib.sha256(raw_key).digest())
@@ -291,7 +287,7 @@ def extract_text_pdf(raw_bytes: bytes) -> str:
 
     # ── Method 1: PyMuPDF (fastest, best layout preservation)
     try:
-        import fitz   # PyMuPDF
+        import fitz  # PyMuPDF
 
         doc = fitz.open(stream=raw_bytes, filetype="pdf")
         pages_text = []
@@ -421,22 +417,22 @@ def cleanup_old_files(directory: str, max_age_seconds: int = 3600):
 if __name__ == "__main__":
     import argparse
     import sys
-    
+
     parser = argparse.ArgumentParser(description="Encryption key management")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    
+
     # Rotate key
     rotate_parser = subparsers.add_parser("rotate-key", help="Rotate encryption key (archive current, generate new)")
     rotate_parser.add_argument("--force", action="store_true", help="Force rotation even if key is recent")
-    
+
     # List keys
     list_parser = subparsers.add_parser("list-keys", help="List available key versions")
-    
+
     # Show current key version
     current_parser = subparsers.add_parser("current-key", help="Show current key version")
-    
+
     args = parser.parse_args()
-    
+
     if args.command == "rotate-key":
         new_version = rotate_encryption_key()
         print(f"Key rotated successfully. New current key: v{new_version}")

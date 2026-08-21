@@ -4,13 +4,10 @@ storage/base.py — Storage Backend Interface
 Abstract base class for storage backends.
 """
 
-import io
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
-from typing import AsyncIterator, BinaryIO, List, Optional
-from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
@@ -25,9 +22,9 @@ class ObjectMetadata(BaseModel):
     """Metadata for a stored object."""
     key: str = Field(..., description="Object key/path")
     size_bytes: int = Field(..., description="Object size in bytes")
-    content_type: Optional[str] = Field(None, description="MIME type")
+    content_type: str | None = Field(None, description="MIME type")
     last_modified: datetime = Field(..., description="Last modification time")
-    etag: Optional[str] = Field(None, description="Entity tag for versioning")
+    etag: str | None = Field(None, description="Entity tag for versioning")
     metadata: dict = Field(default_factory=dict, description="Custom metadata")
 
 
@@ -36,19 +33,19 @@ class PresignedUrlRequest(BaseModel):
     key: str = Field(..., description="Object key")
     expiration_seconds: int = Field(default=3600, description="URL expiration time")
     method: str = Field(default="GET", description="HTTP method (GET, PUT, etc.)")
-    content_type: Optional[str] = Field(None, description="Content type for PUT")
+    content_type: str | None = Field(None, description="Content type for PUT")
 
 
 class StorageBackend(ABC):
     """Abstract storage backend interface."""
-    
+
     @abstractmethod
     async def put_object(
         self,
         key: str,
         data: bytes,
-        content_type: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        content_type: str | None = None,
+        metadata: dict | None = None,
     ) -> ObjectMetadata:
         """
         Upload an object.
@@ -63,18 +60,18 @@ class StorageBackend(ABC):
             Object metadata
         """
         pass
-    
+
     @abstractmethod
     async def put_object_stream(
         self,
         key: str,
         stream: AsyncIterator[bytes],
-        content_type: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        content_type: str | None = None,
+        metadata: dict | None = None,
     ) -> ObjectMetadata:
         """Upload an object from an async stream."""
         pass
-    
+
     @abstractmethod
     async def get_object(self, key: str) -> bytes:
         """
@@ -90,12 +87,12 @@ class StorageBackend(ABC):
             KeyError: If object doesn't exist
         """
         pass
-    
+
     @abstractmethod
     async def get_object_stream(self, key: str) -> AsyncIterator[bytes]:
         """Download an object as an async stream."""
         pass
-    
+
     @abstractmethod
     async def delete_object(self, key: str) -> bool:
         """
@@ -108,7 +105,7 @@ class StorageBackend(ABC):
             True if deleted, False if not found
         """
         pass
-    
+
     @abstractmethod
     async def head_object(self, key: str) -> ObjectMetadata:
         """
@@ -124,14 +121,14 @@ class StorageBackend(ABC):
             KeyError: If object doesn't exist
         """
         pass
-    
+
     @abstractmethod
     async def list_objects(
         self,
         prefix: str = "",
-        delimiter: Optional[str] = None,
+        delimiter: str | None = None,
         max_keys: int = 1000,
-    ) -> List[ObjectMetadata]:
+    ) -> list[ObjectMetadata]:
         """
         List objects with optional prefix filtering.
         
@@ -144,7 +141,7 @@ class StorageBackend(ABC):
             List of object metadata
         """
         pass
-    
+
     @abstractmethod
     async def generate_presigned_url(self, request: PresignedUrlRequest) -> str:
         """
@@ -157,17 +154,17 @@ class StorageBackend(ABC):
             Signed URL string
         """
         pass
-    
+
     @abstractmethod
     async def copy_object(self, source_key: str, dest_key: str) -> ObjectMetadata:
         """Copy an object within the same backend."""
         pass
-    
+
     @abstractmethod
     async def exists(self, key: str) -> bool:
         """Check if object exists."""
         pass
-    
+
     @abstractmethod
     def get_public_url(self, key: str) -> str:
         """Get public URL for an object (if applicable)."""

@@ -1,6 +1,6 @@
 """
 test_api.py — API Integration Tests
-===================================
+=================================
 Tests for all API endpoints including observability features.
 """
 
@@ -113,8 +113,8 @@ class TestMediaCheckEndpoint:
 class TestUploadEndpoint:
     """File upload endpoint tests."""
 
-    def test_upload_invalid_type(self):
-        response = client.post(
+    def test_upload_invalid_type(self, client_with_auth):
+        response = client_with_auth.post(
             "/upload",
             files={"file": ("test.txt", b"text content", "text/plain")}
         )
@@ -122,11 +122,11 @@ class TestUploadEndpoint:
         data = response.json()
         assert "detail" in data
 
-    def test_upload_pdf(self):
+    def test_upload_pdf(self, client_with_auth):
         # Minimal valid PDF
         pdf_content = b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [0 0 612 792]\n>>\nendobj\nxref\n0 4\n0000000000 65535 f\n0000000009 00000 n\n0000000058 00000 n\n0000000115 00000 n\ntrailer\n<<\n/Size 4\n/Root 1 0 R\n>>\nstartxref\n193\n%%EOF"
         
-        response = client.post(
+        response = client_with_auth.post(
             "/upload",
             files={"file": ("test.pdf", pdf_content, "application/pdf")}
         )
@@ -136,10 +136,10 @@ class TestUploadEndpoint:
         assert data["filename"] == "test.pdf"
         assert data["status"] == "uploaded"
 
-    def test_upload_too_large(self):
+    def test_upload_too_large(self, client_with_auth):
         # Create content larger than 50MB
         large_content = b"x" * (51 * 1024 * 1024)
-        response = client.post(
+        response = client_with_auth.post(
             "/upload",
             files={"file": ("large.pdf", large_content, "application/pdf")}
         )
@@ -149,20 +149,8 @@ class TestUploadEndpoint:
 class TestGenerationEndpoints:
     """Generation endpoint tests (require uploaded file)."""
 
-    @pytest.fixture
-    def uploaded_file_id(self):
-        """Upload a test PDF and return file_id."""
-        pdf_content = b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [0 0 612 792]\n>>\nendobj\nxref\n0 4\n0000000000 65535 f\n0000000009 00000 n\n0000000058 00000 n\n0000000115 00000 n\ntrailer\n<<\n/Size 4\n/Root 1 0 R\n>>\nstartxref\n193\n%%EOF"
-        
-        response = client.post(
-            "/upload",
-            files={"file": ("test.pdf", pdf_content, "application/pdf")}
-        )
-        assert response.status_code == 200
-        return response.json()["file_id"]
-
-    def test_generate_summary(self, uploaded_file_id):
-        response = client.post(
+    def test_generate_summary(self, uploaded_file_id, client_with_auth):
+        response = client_with_auth.post(
             "/generate/summary",
             json={"file_id": uploaded_file_id}
         )
@@ -174,8 +162,8 @@ class TestGenerationEndpoints:
         assert data["status"] == "ok"
         assert len(data["summary"]) > 0
 
-    def test_generate_quiz(self, uploaded_file_id):
-        response = client.post(
+    def test_generate_quiz(self, uploaded_file_id, client_with_auth):
+        response = client_with_auth.post(
             "/generate/quiz",
             json={"file_id": uploaded_file_id}
         )
@@ -198,8 +186,8 @@ class TestGenerationEndpoints:
         assert len(q["options"]) == 4
         assert 0 <= q["correct"] <= 3
 
-    def test_generate_audio(self, uploaded_file_id):
-        response = client.post(
+    def test_generate_audio(self, uploaded_file_id, client_with_auth):
+        response = client_with_auth.post(
             "/generate/audio",
             json={"file_id": uploaded_file_id}
         )
@@ -213,8 +201,8 @@ class TestGenerationEndpoints:
             assert data["audio_url"] is not None
             assert data["audio_url"].endswith("_audio.mp3")
 
-    def test_generate_video(self, uploaded_file_id):
-        response = client.post(
+    def test_generate_video(self, uploaded_file_id, client_with_auth):
+        response = client_with_auth.post(
             "/generate/video",
             json={"file_id": uploaded_file_id}
         )
@@ -228,8 +216,8 @@ class TestGenerationEndpoints:
             assert data["video_url"] is not None
             assert data["video_url"].endswith("_video.mp4")
 
-    def test_generate_nonexistent_file(self):
-        response = client.post(
+    def test_generate_nonexistent_file(self, client_with_auth):
+        response = client_with_auth.post(
             "/generate/summary",
             json={"file_id": "nonexistent-file-id"}
         )
@@ -239,30 +227,16 @@ class TestGenerationEndpoints:
 class TestCleanupEndpoint:
     """Cleanup endpoint tests."""
 
-    def test_cleanup(self, uploaded_file_id):
-        response = client.delete(f"/cleanup/{uploaded_file_id}")
+    def test_cleanup(self, uploaded_file_id, client_with_auth):
+        response = client_with_auth.delete(f"/cleanup/{uploaded_file_id}")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "deleted"
         assert data["file_id"] == uploaded_file_id
 
-    def test_cleanup_nonexistent(self):
-        response = client.delete("/cleanup/nonexistent-file-id")
+    def test_cleanup_nonexistent(self, client_with_auth):
+        response = client_with_auth.delete("/cleanup/nonexistent-file-id")
         assert response.status_code == 404
-
-
-# Use the fixture from TestGenerationEndpoints
-@pytest.fixture
-def uploaded_file_id():
-    """Upload a test PDF and return file_id."""
-    pdf_content = b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [0 0 612 792]\n>>\nendobj\nxref\n0 4\n0000000000 65535 f\n0000000009 00000 n\n0000000058 00000 n\n0000000115 00000 n\ntrailer\n<<\n/Size 4\n/Root 1 0 R\n>>\nstartxref\n193\n%%EOF"
-    
-    response = client.post(
-        "/upload",
-        files={"file": ("test.pdf", pdf_content, "application/pdf")}
-    )
-    assert response.status_code == 200
-    return response.json()["file_id"]
 
 
 if __name__ == "__main__":

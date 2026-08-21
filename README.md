@@ -84,44 +84,53 @@ PDF / PPTX Upload
 Text Extraction ── PyMuPDF / python-pptx / pdfplumber
       │
       ▼ NLTK Sentence Tokenization
-BGE Embeddings ── BAAI/bge-small-en-v1.5 → 384-dim vectors
+BGE Embeddings ── BAAI/bge-base-en-v1.5 → 768-dim vectors
       │
       ▼ Advanced ML Component
-Semantic Autoencoder ── 384 → 128-dim latent space (PyTorch)
+Semantic Autoencoder ── 768 → 256-dim latent space (PyTorch)
       │
       ▼ Centroid-based Sentence Selection
       │
-      ├── Pegasus (google/pegasus-xsum) ──────── AI Summary
-      ├── T5 QG (valhalla/t5-base-qg-hl) ─────── MCQ Quiz
-      ├── gTTS ────────────────────────────────── Audio MP3
-      └── MoviePy + PIL ───────────────────────── Video MP4
+      ├── BART-large-CNN (facebook/bart-large-cnn) ─── AI Summary
+      ├── FLAN-T5-large (google/flan-t5-large) ────── MCQ Quiz
+      ├── gTTS ────────────────────────────────────── Audio MP3
+      └── MoviePy + PIL ───────────────────────────── Video MP4
                 │
                 ▼
       Firebase Firestore ── Persist per user session
 ```
 
-### Why Pegasus over BART?
-Pegasus is pre-trained with a gap-sentence generation objective specifically designed for abstractive summarization. It produces more concise, fluent summaries than BART on document-level inputs.
+### Why BART-large-CNN over Pegasus?
+BART-large-CNN is fine-tuned on CNN/DailyMail (300K news articles) for summarization,
+providing stronger factual consistency and better generalization to diverse document types.
+It also supports 1024-token context and is more widely benchmarked.
 
-### Why BAAI/bge-small-en-v1.5 over MiniLM?
-BGE-small consistently outperforms all-MiniLM-L6-v2 on semantic similarity benchmarks (MTEB) while remaining only marginally larger.
+### Why FLAN-T5-large over T5-base-qg-hl?
+FLAN-T5 is instruction-tuned on 1.8K tasks including question generation,
+generalizing better to new domains without requiring specialized `<hl>` answer highlighting.
+It produces higher quality, more diverse questions.
+
+### Why BAAI/bge-base-en-v1.5 over BGE-small?
+BGE-base (768-dim, 110M params) significantly outperforms BGE-small (384-dim, 33M params)
+on MTEB benchmarks (avg +5-8% on semantic similarity tasks) while remaining efficient
+for CPU inference (~2x slower, ~3x memory).
 
 ### Autoencoder Architecture
 
-The autoencoder is the centrepiece of the ML contribution. It learns a compressed, denoised representation of sentence embeddings — removing redundant dimensions and surfacing core semantic signals before Pegasus summarization.
+The autoencoder is the centrepiece of the ML contribution. It learns a compressed, denoised representation of sentence embeddings — removing redundant dimensions and surfacing core semantic signals before BART summarization.
 
 ```
 Encoder                                Decoder
 ────────────────────────               ────────────────────────
-Input:  384-dim (BGE)                  Latent: 128-dim
+Input:  768-dim (BGE-base)             Latent: 256-dim
 Dense:  512  + ReLU + BatchNorm        Dense:  256  + ReLU + BatchNorm
 Dense:  256  + ReLU + BatchNorm        Dense:  512  + ReLU + BatchNorm
-Dense:  128  + Tanh  ← latent ──────►  Output: 384-dim
+Dense:  256  + Tanh  ← latent ──────►  Output: 768-dim
 ```
 
 **Training objective:** MSE reconstruction loss  
 **Optimizer:** Adam with gradient clipping  
-**Compression ratio:** 3:1 (384 → 128 dimensions)
+**Compression ratio:** 3:1 (768 → 256 dimensions)
 
 ### Evaluation Metrics
 
@@ -144,10 +153,10 @@ Dense:  128  + Tanh  ← latent ──────►  Output: 384-dim
 | API Framework | FastAPI + Uvicorn |
 | Authentication | Firebase Admin SDK (ID token verification) |
 | Rate Limiting | Redis (distributed) + in-memory fallback |
-| Summarization | google/pegasus-xsum |
-| Embeddings | BAAI/bge-small-en-v1.5 |
+| Summarization | facebook/bart-large-cnn |
+| Embeddings | BAAI/bge-base-en-v1.5 |
 | Autoencoder | PyTorch (custom architecture) |
-| Quiz Generation | valhalla/t5-base-qg-hl (T5) |
+| Quiz Generation | google/flan-t5-large |
 | Audio | gTTS (Google Text-to-Speech) |
 | Video | MoviePy + Pillow |
 | PDF Parsing | PyMuPDF (fitz) + pdfplumber |

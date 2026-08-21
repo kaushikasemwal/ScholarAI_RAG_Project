@@ -7,11 +7,12 @@ Comprehensive health checks for Kubernetes/container readiness and liveness prob
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
 from pathlib import Path
+from typing import Any
 
 import psutil
 
@@ -30,14 +31,14 @@ class HealthCheckResult:
     status: HealthStatus
     message: str
     duration_ms: float
-    details: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] | None = None
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
 
 
 @dataclass
 class HealthReport:
     status: HealthStatus
-    checks: List[HealthCheckResult]
+    checks: list[HealthCheckResult]
     timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
     version: str = "1.0.0"
     uptime_seconds: float = 0
@@ -53,9 +54,9 @@ class HealthChecker:
     """
 
     def __init__(self, app_start_time: float = None):
-        self._liveness_checks: List[Callable[[], HealthCheckResult]] = []
-        self._readiness_checks: List[Callable[[], HealthCheckResult]] = []
-        self._startup_checks: List[Callable[[], HealthCheckResult]] = []
+        self._liveness_checks: list[Callable[[], HealthCheckResult]] = []
+        self._readiness_checks: list[Callable[[], HealthCheckResult]] = []
+        self._startup_checks: list[Callable[[], HealthCheckResult]] = []
         self._app_start_time = app_start_time or time.time()
 
     def add_liveness_check(self, name: str, check_fn: Callable[[], HealthCheckResult]):
@@ -70,7 +71,7 @@ class HealthChecker:
         """Add a startup check (initialization complete)."""
         self._startup_checks.append(check_fn)
 
-    def run_checks(self, checks: List[Callable[[], HealthCheckResult]]) -> List[HealthCheckResult]:
+    def run_checks(self, checks: list[Callable[[], HealthCheckResult]]) -> list[HealthCheckResult]:
         """Run a list of checks and collect results."""
         results = []
         for check_fn in checks:
@@ -214,7 +215,7 @@ def check_model_files(models_dir: str = "models") -> HealthCheckResult:
         path = Path(models_dir)
         required = ["autoencoder_weights.pt", "encryption.key"]
         missing = [f for f in required if not (path / f).exists()]
-        
+
         if missing:
             return HealthCheckResult(
                 name="model_files",
@@ -239,7 +240,7 @@ def check_model_files(models_dir: str = "models") -> HealthCheckResult:
         )
 
 
-def check_directories(dirs: List[str] = None) -> HealthCheckResult:
+def check_directories(dirs: list[str] = None) -> HealthCheckResult:
     """Check that required directories exist and are writable."""
     dirs = dirs or ["uploads", "outputs", "models"]
     results = []
@@ -254,7 +255,7 @@ def check_directories(dirs: List[str] = None) -> HealthCheckResult:
             results.append({"dir": d, "status": "ok"})
         except Exception as e:
             results.append({"dir": d, "status": "failed", "error": str(e)})
-    
+
     failed = [r for r in results if r["status"] == "failed"]
     if failed:
         return HealthCheckResult(
@@ -275,7 +276,7 @@ def check_directories(dirs: List[str] = None) -> HealthCheckResult:
 
 # ─── DEFAULT HEALTH CHECKER ──────────────────────────────────────
 
-_default_checker: Optional[HealthChecker] = None
+_default_checker: HealthChecker | None = None
 _checker_lock = threading.Lock()
 
 
@@ -295,4 +296,4 @@ def get_health_checker(app_start_time: float = None) -> HealthChecker:
                 _default_checker.add_readiness_check("model_files", lambda: check_model_files())
                 _default_checker.add_startup_check("directories", lambda: check_directories())
                 _default_checker.add_startup_check("model_files", lambda: check_model_files())
-        return _default_checker
+    return _default_checker

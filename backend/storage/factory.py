@@ -4,19 +4,17 @@ storage/factory.py — Storage Factory
 Factory for creating storage backends from configuration.
 """
 
-from typing import Optional
 
+from ..config import get_settings
 from .base import StorageBackend
+from .gcs import GCSStorage
 from .local import LocalStorage
 from .s3 import S3Storage
-from .gcs import GCSStorage
-from ..config import get_settings
+
+_storage_instance: StorageBackend | None = None
 
 
-_storage_instance: Optional[StorageBackend] = None
-
-
-def create_storage(backend: Optional[str] = None) -> StorageBackend:
+def create_storage(backend: str | None = None) -> StorageBackend:
     """
     Create a storage backend instance.
     
@@ -28,13 +26,13 @@ def create_storage(backend: Optional[str] = None) -> StorageBackend:
         Configured StorageBackend instance.
     """
     settings = get_settings()
-    
+
     backend = backend or getattr(settings, "STORAGE_BACKEND", "local")
-    
+
     if backend == "local":
         path = getattr(settings, "STORAGE_LOCAL_PATH", "storage")
         return LocalStorage(base_path=path)
-    
+
     elif backend == "s3":
         return S3Storage(
             bucket=settings.STORAGE_S3_BUCKET,
@@ -44,7 +42,7 @@ def create_storage(backend: Optional[str] = None) -> StorageBackend:
             secret_access_key=getattr(settings, "STORAGE_S3_SECRET_KEY", None),
             prefix=getattr(settings, "STORAGE_S3_PREFIX", ""),
         )
-    
+
     elif backend == "gcs":
         return GCSStorage(
             bucket=settings.STORAGE_GCS_BUCKET,
@@ -52,7 +50,7 @@ def create_storage(backend: Optional[str] = None) -> StorageBackend:
             credentials_path=getattr(settings, "STORAGE_GCS_CREDENTIALS", None),
             prefix=getattr(settings, "STORAGE_GCS_PREFIX", ""),
         )
-    
+
     else:
         raise ValueError(f"Unknown storage backend: {backend}")
 

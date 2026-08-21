@@ -5,7 +5,6 @@ Firebase ID token verification for backend API protection.
 """
 
 import logging
-from typing import Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -22,14 +21,15 @@ def init_firebase_admin():
     global _firebase_app, _auth
     if _firebase_app is not None:
         return _auth
-    
+
     try:
         import firebase_admin
         from firebase_admin import auth, credentials
+
         from .config import get_settings
-        
+
         settings = get_settings()
-        
+
         # Try to get credentials from environment or use default
         cred = None
         if settings.FIREBASE_SERVICE_ACCOUNT_JSON:
@@ -41,7 +41,7 @@ def init_firebase_admin():
         else:
             # Try default credentials (works on GCP, Cloud Run, etc.)
             cred = credentials.ApplicationDefault()
-        
+
         _firebase_app = firebase_admin.initialize_app(cred)
         _auth = auth
         log.info("Firebase Admin SDK initialized successfully")
@@ -65,18 +65,18 @@ security = HTTPBearer(auto_error=False)
 
 class CurrentUser:
     """Current authenticated user from Firebase token."""
-    
-    def __init__(self, uid: str, email: Optional[str] = None, name: Optional[str] = None, picture: Optional[str] = None):
+
+    def __init__(self, uid: str, email: str | None = None, name: str | None = None, picture: str | None = None):
         self.uid = uid
         self.email = email
         self.name = name
         self.picture = picture
-    
+
     def __repr__(self):
         return f"CurrentUser(uid={self.uid}, email={self.email})"
 
 
-async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> CurrentUser:
+async def get_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> CurrentUser:
     """
     Verify Firebase ID token and return current user.
     
@@ -84,34 +84,34 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
         HTTPException: If token is missing, invalid, or expired.
     """
     auth = get_firebase_auth()
-    
+
     if auth is None:
         # Auth not configured - allow request but log warning
         log.warning("Firebase Auth not configured, allowing unauthenticated request")
         return CurrentUser(uid="anonymous", email=None)
-    
+
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     try:
         decoded_token = auth.verify_id_token(credentials.credentials)
         uid = decoded_token.get("uid")
         email = decoded_token.get("email")
         name = decoded_token.get("name")
         picture = decoded_token.get("picture")
-        
+
         if not uid:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token: missing uid",
             )
-        
+
         return CurrentUser(uid=uid, email=email, name=name, picture=picture)
-    
+
     except Exception as e:
         log.warning(f"Token verification failed: {e}")
         raise HTTPException(
@@ -121,7 +121,7 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
         )
 
 
-async def get_current_user_optional(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[CurrentUser]:
+async def get_current_user_optional(credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> CurrentUser | None:
     """
     Get current user if token is valid, otherwise return None.
     Useful for endpoints that work both authenticated and unauthenticated.

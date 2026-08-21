@@ -3,28 +3,28 @@ summarizer.py — Summarization Pipeline
 ======================================
 Pipeline:
   1. Split text into sentences (NLTK)
-  2. Encode with Sentence-BERT (BAAI/bge-small-en-v1.5) → 384-dim embeddings
-  3. Pass through Autoencoder → 128-dim compressed embeddings
+  2. Encode with Sentence-BERT (BAAI/bge-base-en-v1.5) → 768-dim embeddings
+  3. Pass through Autoencoder → 256-dim compressed embeddings
   4. Select top-k representative sentences via cosine similarity to centroid
-  5. Feed into Pegasus (google/pegasus-xsum) for abstractive summary
+  5. Feed into BART-large-CNN (facebook/bart-large-cnn) for abstractive summary
 
-Why Pegasus over BART?
-  Pegasus is pre-trained with a gap-sentence generation objective specifically
-  designed for abstractive summarization. It produces more concise, fluent
-  summaries than BART on document-level inputs.
+Why BART-large-CNN over Pegasus?
+  BART-large-CNN is fine-tuned on CNN/DailyMail for news summarization,
+  providing strong performance on general documents with better factual consistency.
+  It also supports longer context (1024 tokens) and is more widely used.
 
-Why BAAI/bge-small-en-v1.5 over MiniLM?
-  BGE-small consistently outperforms all-MiniLM-L6-v2 on semantic similarity
-  benchmarks (MTEB) while being only marginally larger.
+Why BAAI/bge-base-en-v1.5 over BGE-small?
+  BGE-base (768-dim) significantly outperforms BGE-small (384-dim) on MTEB benchmarks
+  while remaining efficient for CPU inference.
 
 Course: Advanced Topics in Machine Learning
 """
 
 import logging
-from typing import List
+
+import nltk
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-import nltk
 
 log = logging.getLogger(__name__)
 
@@ -38,12 +38,11 @@ except LookupError:
     nltk.download("punkt_tab", quiet=True)
 
 # Import from centralized model manager
-from .models import get_sbert, get_pegasus, get_autoencoder
-
+from .models import get_autoencoder, get_pegasus, get_sbert
 
 # ─── PIPELINE STEPS ─────────────────────────────────────────────
 
-def preprocess_text(text: str, max_sentences: int = 80) -> List[str]:
+def preprocess_text(text: str, max_sentences: int = 80) -> list[str]:
     sentences = nltk.sent_tokenize(text)
     sentences = [s.strip() for s in sentences if len(s.split()) > 6]
     if len(sentences) > max_sentences:
@@ -52,7 +51,7 @@ def preprocess_text(text: str, max_sentences: int = 80) -> List[str]:
     return sentences
 
 
-def embed_sentences(sentences: List[str]) -> np.ndarray:
+def embed_sentences(sentences: list[str]) -> np.ndarray:
     model = get_sbert()
     # BGE models benefit from a query prefix for retrieval tasks
     embeddings = model.encode(
@@ -61,7 +60,7 @@ def embed_sentences(sentences: List[str]) -> np.ndarray:
         convert_to_numpy=True,
         normalize_embeddings=True   # BGE recommendation
     )
-    log.info(f"BGE-small: encoded {len(sentences)} sentences → {embeddings.shape}")
+    log.info(f"BGE-base: encoded {len(sentences)} sentences → {embeddings.shape}")
     return embeddings
 
 
@@ -72,9 +71,9 @@ def compress_embeddings(embeddings: np.ndarray) -> np.ndarray:
     return compressed
 
 
-def select_key_sentences(sentences: List[str],
+def select_key_sentences(sentences: list[str],
                           compressed: np.ndarray,
-                          top_k: int = 12) -> str:
+                          top_k: int = 15) -> str:
     centroid = compressed.mean(axis=0, keepdims=True)
     sims     = cosine_similarity(compressed, centroid).flatten()
     top_idx  = sorted(np.argsort(sims)[::-1][:top_k].tolist())
@@ -92,7 +91,7 @@ def abstractive_summary(context: str,
         max_length=max_length,
         min_length=min_length,
         num_beams=4,
-        length_penalty=1.5,
+        length_penalty=2.0,  # BART prefers higher length penalty
         early_stopping=True,
         no_repeat_ngram_size=3
     )
@@ -110,8 +109,8 @@ def generate_summary(text: str) -> tuple[str, dict]:
             - fallback_reason: str (if fallback_used)
             - model_used: str
     """
-    metadata = {"fallback_used": False, "fallback_reason": None, "model_used": "pegasus"}
-    
+    metadata = {"fallback_used": False, "fallback_reason": None, "model_used": "bart-large-cnn"}
+
     if not text or len(text.strip()) < 50:
         return "Insufficient text content found in document.", metadata
     try:

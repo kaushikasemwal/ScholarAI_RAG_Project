@@ -111,7 +111,7 @@ filterwarnings = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-select = ["E", "F", "I", "UP", "W", "C4", "PT", "PI", "TRY", "SIM", "TID", "ARG", "PTH"]
+select = ["E", "F", "I", "UP", "W", "C4", "PT", "TRY", "SIM", "TID", "ARG", "PTH"]
 ignore = ["S101", "S311", "S603", "S607", "PTH207"]
 exclude = [".venv", "venv", "__pycache__", ".pytest_cache", "build", "dist", "*.egg-info", ".git", "outputs", "uploads", "models"]
 

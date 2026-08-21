@@ -7,10 +7,8 @@ Compatible with Prometheus text exposition format.
 
 import threading
 import time
-from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -18,11 +16,11 @@ class Counter:
     """Thread-safe counter metric."""
     name: str
     help_text: str
-    labels: Dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
     _value: float = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
-    def inc(self, value: float = 1, labels: Optional[Dict[str, str]] = None):
+    def inc(self, value: float = 1, labels: dict[str, str] | None = None):
         with self._lock:
             self._value += value
 
@@ -36,9 +34,9 @@ class Histogram:
     """Thread-safe histogram with configurable buckets."""
     name: str
     help_text: str
-    buckets: List[float] = field(default_factory=lambda: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0])
-    labels: Dict[str, str] = field(default_factory=dict)
-    _counts: List[int] = field(default_factory=list, init=False)
+    buckets: list[float] = field(default_factory=lambda: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0])
+    labels: dict[str, str] = field(default_factory=dict)
+    _counts: list[int] = field(default_factory=list, init=False)
     _sum: float = 0
     _count: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
@@ -46,7 +44,7 @@ class Histogram:
     def __post_init__(self):
         self._counts = [0] * len(self.buckets)
 
-    def observe(self, value: float, labels: Optional[Dict[str, str]] = None):
+    def observe(self, value: float, labels: dict[str, str] | None = None):
         with self._lock:
             self._count += 1
             self._sum += value
@@ -62,7 +60,7 @@ class Histogram:
         with self._lock:
             return self._sum
 
-    def get_buckets(self) -> List[int]:
+    def get_buckets(self) -> list[int]:
         with self._lock:
             return self._counts.copy()
 
@@ -72,19 +70,19 @@ class Gauge:
     """Thread-safe gauge metric."""
     name: str
     help_text: str
-    labels: Dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
     _value: float = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
-    def set(self, value: float, labels: Optional[Dict[str, str]] = None):
+    def set(self, value: float, labels: dict[str, str] | None = None):
         with self._lock:
             self._value = value
 
-    def inc(self, value: float = 1, labels: Optional[Dict[str, str]] = None):
+    def inc(self, value: float = 1, labels: dict[str, str] | None = None):
         with self._lock:
             self._value += value
 
-    def dec(self, value: float = 1, labels: Optional[Dict[str, str]] = None):
+    def dec(self, value: float = 1, labels: dict[str, str] | None = None):
         with self._lock:
             self._value -= value
 
@@ -109,16 +107,16 @@ class MetricsCollector:
 
     def __init__(self, namespace: str = "scholarai"):
         self.namespace = namespace
-        self._counters: Dict[str, Counter] = {}
-        self._histograms: Dict[str, Histogram] = {}
-        self._gauges: Dict[str, Gauge] = {}
+        self._counters: dict[str, Counter] = {}
+        self._histograms: dict[str, Histogram] = {}
+        self._gauges: dict[str, Gauge] = {}
         self._lock = threading.Lock()
 
-    def _make_key(self, name: str, labels: Dict[str, str]) -> str:
+    def _make_key(self, name: str, labels: dict[str, str]) -> str:
         label_str = ",".join(f'{k}="{v}"' for k, v in sorted(labels.items()))
         return f"{name}{{{label_str}}}" if label_str else name
 
-    def counter(self, name: str, help_text: str, labels: Optional[Dict[str, str]] = None) -> Counter:
+    def counter(self, name: str, help_text: str, labels: dict[str, str] | None = None) -> Counter:
         """Get or create a counter."""
         full_name = f"{self.namespace}_{name}"
         key = self._make_key(full_name, labels or {})
@@ -127,7 +125,7 @@ class MetricsCollector:
                 self._counters[key] = Counter(full_name, help_text, labels or {})
             return self._counters[key]
 
-    def histogram(self, name: str, help_text: str, buckets: Optional[List[float]] = None, labels: Optional[Dict[str, str]] = None) -> Histogram:
+    def histogram(self, name: str, help_text: str, buckets: list[float] | None = None, labels: dict[str, str] | None = None) -> Histogram:
         """Get or create a histogram."""
         full_name = f"{self.namespace}_{name}"
         key = self._make_key(full_name, labels or {})
@@ -136,7 +134,7 @@ class MetricsCollector:
                 self._histograms[key] = Histogram(full_name, help_text, buckets or [], labels or {})
             return self._histograms[key]
 
-    def gauge(self, name: str, help_text: str, labels: Optional[Dict[str, str]] = None) -> Gauge:
+    def gauge(self, name: str, help_text: str, labels: dict[str, str] | None = None) -> Gauge:
         """Get or create a gauge."""
         full_name = f"{self.namespace}_{name}"
         key = self._make_key(full_name, labels or {})
@@ -148,20 +146,20 @@ class MetricsCollector:
     def generate_prometheus_output(self) -> str:
         """Generate Prometheus text format output."""
         lines = []
-        
+
         # Counters
         for counter in self._counters.values():
             lines.append(f"# HELP {counter.name} {counter.help_text}")
             lines.append(f"# TYPE {counter.name} counter")
             label_str = self._format_labels(counter.labels)
             lines.append(f"{counter.name}{label_str} {counter.get()}")
-        
+
         # Histograms
         for hist in self._histograms.values():
             lines.append(f"# HELP {hist.name} {hist.help_text}")
             lines.append(f"# TYPE {hist.name} histogram")
             label_str = self._format_labels(hist.labels)
-            
+
             # Bucket counts
             for i, bucket in enumerate(hist.buckets):
                 if hist.labels:
@@ -171,25 +169,25 @@ class MetricsCollector:
                 else:
                     bucket_label = f"{hist.name}{{le=\"{bucket:g}\"}}"
                 lines.append(f"{bucket_label} {hist._counts[i]}")
-            
+
             # +Inf bucket
             inf_label = self._format_histogram_label(hist, "+Inf")
             lines.append(f"{inf_label} {hist.get_count()}")
-            
+
             # Sum and count
             lines.append(f"{hist.name}_sum{label_str} {hist.get_sum()}")
             lines.append(f"{hist.name}_count{label_str} {hist.get_count()}")
-        
+
         # Gauges
         for gauge in self._gauges.values():
             lines.append(f"# HELP {gauge.name} {gauge.help_text}")
             lines.append(f"# TYPE {gauge.name} gauge")
             label_str = self._format_labels(gauge.labels)
             lines.append(f"{gauge.name}{label_str} {gauge.get()}")
-        
+
         return "\n".join(lines) + "\n"
 
-    def _format_labels(self, labels: Dict[str, str]) -> str:
+    def _format_labels(self, labels: dict[str, str]) -> str:
         if not labels:
             return ""
         return "{" + ",".join(f'{k}="{v}"' for k, v in sorted(labels.items())) + "}"
@@ -203,7 +201,7 @@ class MetricsCollector:
 
 
 # Global metrics collector
-_metrics_collector: Optional[MetricsCollector] = None
+_metrics_collector: MetricsCollector | None = None
 _metrics_lock = threading.Lock()
 
 
@@ -214,6 +212,15 @@ def get_metrics_collector() -> MetricsCollector:
         with _metrics_lock:
             if _metrics_collector is None:
                 _metrics_collector = MetricsCollector()
+                # Initialize default metrics so /metrics always returns valid output
+                _metrics_collector.counter("http_requests_total", "Total HTTP requests")
+                _metrics_collector.histogram("http_request_duration_seconds", "HTTP request latency")
+                _metrics_collector.gauge("http_requests_in_flight", "In-flight HTTP requests")
+                _metrics_collector.counter("generation_total", "Total content generations")
+                _metrics_collector.histogram("generation_duration_seconds", "Generation latency")
+                _metrics_collector.histogram("model_load_duration_seconds", "Model loading latency")
+                _metrics_collector.counter("file_uploads_total", "Total file uploads")
+                _metrics_collector.histogram("file_upload_size_bytes", "Uploaded file size")
     return _metrics_collector
 
 
@@ -250,7 +257,7 @@ def record_request(method: str, endpoint: str, status_code: int = 200):
     in_flight.inc(labels={"method": method, "endpoint": endpoint})
     try:
         yield
-    except Exception as e:
+    except Exception:
         counter.inc(labels={**labels, "status": "500"})
         raise
     finally:

@@ -7,14 +7,13 @@ JSON-formatted structured logging with request correlation IDs.
 import json
 import logging
 import sys
-import time
 import uuid
 from contextvars import ContextVar
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 # Context variable for request correlation ID
-request_id_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 
 class StructuredFormatter(logging.Formatter):
@@ -25,7 +24,7 @@ class StructuredFormatter(logging.Formatter):
         self.service_name = service_name
 
     def format(self, record: logging.LogRecord) -> str:
-        log_data: Dict[str, Any] = {
+        log_data: dict[str, Any] = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "level": record.levelname,
             "logger": record.name,
@@ -88,7 +87,7 @@ def get_logger(name: str) -> StructuredLogger:
     return StructuredLogger(name)
 
 
-def set_request_id(request_id: Optional[str] = None) -> str:
+def set_request_id(request_id: str | None = None) -> str:
     """Set the request ID for the current context. Returns the ID."""
     if request_id is None:
         request_id = str(uuid.uuid4())[:8]
@@ -96,7 +95,7 @@ def set_request_id(request_id: Optional[str] = None) -> str:
     return request_id
 
 
-def get_request_id() -> Optional[str]:
+def get_request_id() -> str | None:
     """Get the current request ID."""
     return request_id_var.get()
 

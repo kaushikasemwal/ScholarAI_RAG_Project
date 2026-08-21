@@ -39,19 +39,20 @@ nltk.download('stopwords'); \
 nltk.download('averaged_perceptron_tagger')"
 
 # Pre-download models so first request isn't slow
+# Use MODEL_TIER=balanced for smaller models on HF Spaces (CPU Basic)
 RUN python -c "\
 from sentence_transformers import SentenceTransformer; \
-SentenceTransformer('BAAI/bge-small-en-v1.5')" || true
+SentenceTransformer('BAAI/bge-base-en-v1.5')" || true
 
 RUN python -c "\
-from transformers import PegasusTokenizer, PegasusForConditionalGeneration; \
-PegasusTokenizer.from_pretrained('google/pegasus-xsum'); \
-PegasusForConditionalGeneration.from_pretrained('google/pegasus-xsum')" || true
+from transformers import BartTokenizer, BartForConditionalGeneration; \
+BartTokenizer.from_pretrained('facebook/bart-large-cnn'); \
+BartForConditionalGeneration.from_pretrained('facebook/bart-large-cnn')" || true
 
 RUN python -c "\
 from transformers import T5ForConditionalGeneration, T5Tokenizer; \
-T5Tokenizer.from_pretrained('valhalla/t5-base-qg-hl'); \
-T5ForConditionalGeneration.from_pretrained('valhalla/t5-base-qg-hl')" || true
+T5Tokenizer.from_pretrained('google/flan-t5-large'); \
+T5ForConditionalGeneration.from_pretrained('google/flan-t5-large')" || true
 
 # Copy app code
 COPY . .
@@ -65,5 +66,8 @@ USER appuser
 
 # HF Spaces requires port 7860
 EXPOSE 7860
+
+# Set model tier to balanced for CPU Basic tier (smaller models)
+ENV MODEL_TIER=balanced
 
 CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]

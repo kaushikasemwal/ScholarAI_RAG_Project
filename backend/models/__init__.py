@@ -207,36 +207,62 @@ def register_default_models() -> ModelManager:
 # ─── PRIVATE LOADER FUNCTIONS ────────────────────────────────────
 
 def _load_sbert():
-    """Load BGE-small sentence transformer."""
+    """Load BGE sentence transformer (base or small based on config)."""
     from sentence_transformers import SentenceTransformer
-    log.info("Loading BGE-small embedding model…")
-    return SentenceTransformer("BAAI/bge-small-en-v1.5")
+    from .config import get_settings
+    settings = get_settings()
+    
+    if settings.MODEL_TIER == "speed":
+        model_name = settings.SBERT_MODEL_LIGHT
+    else:
+        model_name = settings.SBERT_MODEL
+    
+    log.info(f"Loading SBERT model: {model_name}…")
+    return SentenceTransformer(model_name)
 
 
 def _load_pegasus():
-    """Load Pegasus tokenizer and model."""
-    from transformers import PegasusTokenizer, PegasusForConditionalGeneration
-    log.info("Loading Pegasus summarization model…")
-    tokenizer = PegasusTokenizer.from_pretrained("google/pegasus-xsum")
-    model = PegasusForConditionalGeneration.from_pretrained("google/pegasus-xsum")
+    """Load BART-large-CNN tokenizer and model for summarization."""
+    from transformers import BartTokenizer, BartForConditionalGeneration
+    from .config import get_settings
+    settings = get_settings()
+    
+    if settings.MODEL_TIER == "speed":
+        model_name = settings.PEGASUS_MODEL_LIGHT
+    else:
+        model_name = settings.PEGASUS_MODEL
+    
+    log.info(f"Loading summarization model: {model_name}…")
+    tokenizer = BartTokenizer.from_pretrained(model_name)
+    model = BartForConditionalGeneration.from_pretrained(model_name)
     return model, tokenizer
 
 
 def _load_t5():
-    """Load T5 tokenizer and model for question generation."""
+    """Load FLAN-T5 tokenizer and model for question generation."""
     from transformers import T5ForConditionalGeneration, T5Tokenizer
-    log.info("Loading T5 question generation model…")
-    model_name = "valhalla/t5-base-qg-hl"
+    from .config import get_settings
+    settings = get_settings()
+    
+    if settings.MODEL_TIER == "speed":
+        model_name = settings.T5_MODEL_LIGHT
+    else:
+        model_name = settings.T5_MODEL
+    
+    log.info(f"Loading QG model: {model_name}…")
     tokenizer = T5Tokenizer.from_pretrained(model_name)
     model = T5ForConditionalGeneration.from_pretrained(model_name)
-    log.info("T5 QG model loaded.")
+    log.info("FLAN-T5 QG model loaded.")
     return model, tokenizer
 
 
-def _load_autoencoder(input_dim: int = 384):
+def _load_autoencoder(input_dim: int = 768):
     """Load semantic autoencoder."""
     from .autoencoder import SemanticAutoencoder
-    ae = SemanticAutoencoder(input_dim=input_dim, latent_dim=128)
+    from .config import get_settings
+    settings = get_settings()
+    latent_dim = settings.AUTOENCODER_LATENT_DIM
+    ae = SemanticAutoencoder(input_dim=input_dim, latent_dim=latent_dim)
     ae.try_load_weights()
     return ae
 

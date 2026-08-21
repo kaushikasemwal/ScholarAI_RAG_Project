@@ -8,6 +8,8 @@ import sys
 import os
 import pytest
 from pathlib import Path
+from fastapi.testclient import TestClient
+from backend.auth import CurrentUser
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -15,6 +17,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Configure test environment
 os.environ["LOG_JSON"] = "false"
 os.environ["ALLOWED_ORIGINS"] = "*"
+os.environ["FIREBASE_SERVICE_ACCOUNT_JSON"] = "{}"
+
+from backend.app import app
+
+
+@pytest.fixture(scope="session")
+def client():
+    """Test client fixture."""
+    return TestClient(app)
 
 
 @pytest.fixture(scope="session")
@@ -24,9 +35,28 @@ def sample_pdf():
 
 
 @pytest.fixture
-def uploaded_file_id(client, sample_pdf):
+def test_user():
+    """Test user fixture."""
+    return CurrentUser(uid="test-user-123", email="test@example.com", name="Test User")
+
+
+@pytest.fixture
+def client_with_auth(client, test_user):
+    """Client with authentication overridden."""
+    from backend.auth import get_current_user
+    
+    def override_get_current_user():
+        return test_user
+    
+    app.dependency_overrides[get_current_user] = override_get_current_user
+    yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def uploaded_file_id(client_with_auth, sample_pdf):
     """Upload a test PDF and return file_id."""
-    response = client.post(
+    response = client_with_auth.post(
         "/upload",
         files={"file": ("test.pdf", sample_pdf, "application/pdf")}
     )

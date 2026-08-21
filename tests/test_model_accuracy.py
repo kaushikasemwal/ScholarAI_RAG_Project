@@ -194,7 +194,8 @@ class TestSummarizerAccuracy:
     @pytest.fixture(scope="class")
     def summary(self):
         from backend.summarizer import generate_summary
-        return generate_summary(LONG_TEXT)
+        summary_text, _ = generate_summary(LONG_TEXT)
+        return summary_text
 
     def test_summary_not_empty(self, summary):
         assert summary and len(summary.strip()) > 0

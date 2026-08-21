@@ -14,7 +14,6 @@ Course: Advanced Topics in Machine Learning (HTML)
 import logging
 import textwrap
 from pathlib import Path
-from typing import List, Tuple
 
 import nltk
 
@@ -108,7 +107,7 @@ def render_slide(title: str, body: str, slide_num: int, total: int):
 
 # ─── SLIDE SEGMENTATION ─────────────────────────────────────────
 
-def _segment_summary(summary: str, sentences_per_slide: int = 3) -> List[Tuple[str, str]]:
+def _segment_summary(summary: str, sentences_per_slide: int = 3) -> list[tuple[str, str]]:
     """
     Split summary into slides. More content → more slides → longer video.
     sentences_per_slide controls granularity (3 = ~60-90 words per slide).
@@ -154,8 +153,8 @@ def generate_video(summary: str, output_path: str) -> tuple[str, dict]:
         except Exception as _fe:
             log.warning(f"Could not set bundled ffmpeg path: {_fe}")
 
-        from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
         import numpy as np
+        from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
 
         segments = _segment_summary(summary, sentences_per_slide=3)
         log.info(f"Rendering {len(segments)} slides…")
@@ -257,8 +256,8 @@ def generate_video(summary: str, output_path: str) -> tuple[str, dict]:
 def _write_slideshow_fallback(summary: str, output_path: str) -> str:
     """Returns the zip_path."""
     try:
-        import io, zipfile
-        from PIL import Image
+        import io
+        import zipfile
 
         segments = _segment_summary(summary)
         zip_path = output_path.replace(".mp4", "_slides.zip")

@@ -17,63 +17,72 @@ Author : ScholarAI Project
 Course : Advanced Topics in Machine Learning (HTML)
 """
 
-import os, uuid, time, logging, threading
-from pathlib import Path
-from contextlib import asynccontextmanager
-from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, List
-from enum import Enum
 import asyncio
 import json
+import logging
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from enum import Enum
+from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Request, status, Response, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from .utils import encrypt_file, decrypt_file, cleanup_old_files
-from .summarizer import generate_summary
-from .quiz_generator import generate_quiz
-from .tts_generator import generate_audio
-from .video_generator import generate_video
-from .models import register_default_models
+from .auth import CurrentUser, require_auth
 from .config import get_settings
-from .schemas import (
-    GenerateRequest,
-    UploadResponse,
-    SummaryResponse,
-    QuizResponse,
-    AudioResponse,
-    VideoResponse,
-    MediaCheckResponse,
-    CleanupResponse,
-    HealthResponse,
-    ErrorResponse,
-    Tags,
-    JobStatus,
-    JobCreateRequest,
-    JobCreateResponse,
-    JobStatusResponse,
-)
+from .models import register_default_models
 from .observability import (
-    setup_logging,
-    get_logger,
     RequestIDMiddleware,
-    get_metrics_collector,
     get_health_checker,
-    record_request,
+    get_logger,
+    get_metrics_collector,
     record_generation,
-    record_model_load,
     record_upload,
+    setup_logging,
 )
 from .observability.health import HealthStatus
-from .schemas import GenerationStatus
-from .websocket import get_ws_manager
-from .auth import get_current_user, require_auth, CurrentUser
+from .quiz_generator import generate_quiz
+from .rate_limit import get_rate_limiter
+from .schemas import (
+    AudioResponse,
+    CleanupResponse,
+    ErrorResponse,
+    GenerateRequest,
+    GenerationStatus,
+    HealthResponse,
+    JobCreateRequest,
+    JobCreateResponse,
+    JobStatus,
+    JobStatusResponse,
+    MediaCheckResponse,
+    QuizResponse,
+    SummaryResponse,
+    Tags,
+    UploadResponse,
+    VideoResponse,
+)
 from .storage import get_storage
-from .rate_limit import get_rate_limiter, rate_limit_dependency, RateLimitResult
+from .summarizer import generate_summary
+from .tts_generator import generate_audio
+from .utils import decrypt_file, encrypt_file
+from .video_generator import generate_video
+from .websocket import get_ws_manager
 
 # ─── SETTINGS ──────────────────────────────────────────────────────
 settings = get_settings()
@@ -140,33 +149,42 @@ if ALLOWED_ORIGINS == ["*"]:
     log.warning("CORS allowing all origins (set ALLOWED_ORIGINS env var for production)")
 
 # ─── RATE LIMITER DEPENDENCY ──────────────────────────────────────
-async def rate_limit(request: Request, limit: str = "100/minute"):
-    """Rate limit dependency using Redis."""
-    # Parse limit string like "100/minute" -> (100, 60)
-    try:
-        parts = limit.split("/")
-        max_requests = int(parts[0])
-        window_str = parts[1] if len(parts) > 1 else "minute"
-        window_map = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}
-        window_seconds = window_map.get(window_str, 60)
-    except Exception:
-        max_requests, window_seconds = 100, 60
-    
-    # Use client IP as identifier
-    identifier = request.client.host if request.client else "unknown"
-    endpoint = request.url.path
-    
-    limiter = get_app_rate_limiter()
-    if limiter:
-        result = await limiter.check_limit(identifier, endpoint, max_requests, window_seconds)
-        if not result.allowed:
-            from fastapi import HTTPException
-            raise HTTPException(
-                status_code=429,
-                detail=f"Rate limit exceeded. Try again in {int(result.retry_after or 0)} seconds.",
-                headers={"Retry-After": str(int(result.retry_after or window_seconds))}
-            )
-    # If Redis unavailable, allow request (fail open)
+def create_rate_limit_dependency(limit: str):
+    """Create a rate limit dependency with a specific limit."""
+    async def rate_limit_dependency(request: Request):
+        # Parse limit string like "100/minute" -> (100, 60)
+        try:
+            parts = limit.split("/")
+            max_requests = int(parts[0])
+            window_str = parts[1] if len(parts) > 1 else "minute"
+            window_map = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}
+            window_seconds = window_map.get(window_str, 60)
+        except Exception:
+            max_requests, window_seconds = 100, 60
+
+        # Use client IP as identifier
+        identifier = request.client.host if request.client else "unknown"
+        endpoint = request.url.path
+
+        limiter = get_app_rate_limiter()
+        if limiter:
+            result = await limiter.check_limit(identifier, endpoint, max_requests, window_seconds)
+            if not result.allowed:
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit exceeded. Try again in {int(result.retry_after or 0)} seconds.",
+                    headers={"Retry-After": str(int(result.retry_after or window_seconds))}
+                )
+        # If Redis unavailable, allow request (fail open)
+    return rate_limit_dependency
+
+
+# Pre-configured rate limit dependencies
+rate_limit_default = create_rate_limit_dependency("100/minute")
+rate_limit_upload = create_rate_limit_dependency("10/minute")
+rate_limit_cleanup = create_rate_limit_dependency("30/minute")
+rate_limit_jobs = create_rate_limit_dependency("10/minute")
 
 # ─── THREAD POOL FOR CPU-BOUND TASKS ─────────────────────────────
 # Separate thread pool for ML generation to avoid blocking event loop
@@ -190,10 +208,10 @@ class GenerationJob(BaseModel):
     status: JobStatus = JobStatus.PENDING
     progress: int = 0  # 0-100
     created_at: float = Field(default_factory=time.time)
-    started_at: Optional[float] = None
-    completed_at: Optional[float] = None
-    result: Optional[dict] = None
-    error: Optional[str] = None
+    started_at: float | None = None
+    completed_at: float | None = None
+    result: dict | None = None
+    error: str | None = None
     user_id: str = ""  # Owner of this job
 
 
@@ -230,7 +248,7 @@ def create_job(file_id: str, generation_type: str, user_id: str) -> GenerationJo
     return job
 
 
-def get_job(job_id: str) -> Optional[GenerationJob]:
+def get_job(job_id: str) -> GenerationJob | None:
     """Get job by ID."""
     with JOB_STORE_LOCK:
         return JOB_STORE.get(job_id)
@@ -258,14 +276,14 @@ def update_job_status(job_id: str, status: JobStatus, result: dict = None, error
 def run_generation_job(job_id: str):
     """Background task to run generation job with WebSocket progress updates."""
     import asyncio
-    
+
     job = get_job(job_id)
     if not job:
         return
-    
+
     update_job_status(job_id, JobStatus.RUNNING)
     ws_manager = get_ws_manager()
-    
+
     async def _send_progress(progress: int, status: str, result: dict = None, error: str = None):
         """Send progress update via WebSocket and update job status."""
         await ws_manager.send_progress(job_id, progress, status, result, error)
@@ -275,27 +293,27 @@ def run_generation_job(job_id: str):
             update_job_status(job_id, JobStatus.COMPLETED, result=result, progress=progress)
         elif status == "failed":
             update_job_status(job_id, JobStatus.FAILED, error=error, progress=progress)
-    
+
     async def _run():
         try:
             await _send_progress(5, "running", None, None)
             text = await _get_text(job.file_id, job.user_id)
             await _send_progress(10, "running", None, None)
-            
+
             if job.generation_type == "summary":
                 await _send_progress(20, "running", None, None)
                 with record_generation("summary", success=True):
                     summary = await run_in_threadpool(generate_summary, text)
                 await _send_progress(90, "running", None, None)
                 result = {"file_id": job.file_id, "summary": summary, "status": "ok"}
-            
+
             elif job.generation_type == "quiz":
                 await _send_progress(20, "running", None, None)
                 with record_generation("quiz", success=True):
                     questions = await run_in_threadpool(generate_quiz, text, 10)
                 await _send_progress(90, "running", None, None)
                 result = {"file_id": job.file_id, "questions": questions, "status": "ok"}
-            
+
             elif job.generation_type == "audio":
                 await _send_progress(20, "running", None, None)
                 summary = await run_in_threadpool(generate_summary, text)
@@ -307,7 +325,7 @@ def run_generation_job(job_id: str):
                 else:
                     await _send_progress(100, "failed", None, "TTS generation failed")
                     return
-            
+
             elif job.generation_type == "video":
                 await _send_progress(15, "running", None, None)
                 summary = await run_in_threadpool(generate_summary, text)
@@ -326,16 +344,16 @@ def run_generation_job(job_id: str):
                     else:
                         await _send_progress(100, "failed", None, "Video generation failed")
                         return
-            
+
             else:
                 raise ValueError(f"Unknown generation type: {job.generation_type}")
-            
+
             await _send_progress(100, "completed", result, None)
-        
+
         except Exception as e:
             log.error(f"Generation job {job_id} failed: {e}", exc_info=True)
             await _send_progress(100, "failed", None, str(e))
-    
+
     # Run async function in new event loop
     asyncio.run(_run())
 
@@ -351,10 +369,10 @@ async def lifespan(app: FastAPI):
     log.info(f"[startup] uploads dir OK  : {UPLOAD_DIR}")
     log.info(f"[startup] outputs dir OK  : {OUTPUT_DIR}")
     log.info("[startup] StaticFiles mount for /media will serve from outputs/")
-    
+
     # Clean up orphaned files on startup
     _cleanup_orphaned_uploads()
-    
+
     # Register and optionally preload ML models
     register_default_models()
     # Preload models at startup (reduces first-request latency)
@@ -365,9 +383,9 @@ async def lifespan(app: FastAPI):
         log.info("[startup] Preloaded SBERT model")
     except Exception as e:
         log.warning(f"[startup] Model preload failed (will load on-demand): {e}")
-    
+
     yield
-    
+
     # Shutdown: unload models to free memory
     from .models import get_model_manager
     unloaded = get_model_manager().unload_all()
@@ -622,7 +640,7 @@ Upload a PDF or PowerPoint file for processing.
         429: {"description": "Rate limit exceeded", "model": ErrorResponse},
     },
 )
-async def upload_file(request: Request, file: UploadFile = File(...), current_user: CurrentUser = Depends(require_auth), _rate_limit: None = Depends(lambda r: rate_limit(r, "10/minute"))) -> UploadResponse:
+async def upload_file(request: Request, file: UploadFile = File(...), current_user: CurrentUser = Depends(require_auth), _rate_limit: None = Depends(rate_limit_upload)) -> UploadResponse:
     allowed_types = {
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -651,7 +669,7 @@ async def upload_file(request: Request, file: UploadFile = File(...), current_us
     file_id   = str(uuid.uuid4())
     encrypted = encrypt_file(raw_bytes)
     storage_key = f"uploads/{file_id}{ext}.enc"
-    
+
     # Store in storage backend
     storage = get_storage_backend()
     await storage.put_object(storage_key, encrypted, content_type="application/octet-stream")
@@ -677,7 +695,7 @@ async def _get_text(file_id: str, user_id: str) -> str:
         if file_id not in FILE_STORE:
             raise HTTPException(404, "File not found. Please re-upload.")
         meta = FILE_STORE[file_id]
-    
+
     # Verify user owns this file
     if meta.get("user_id") != user_id:
         raise HTTPException(403, "Access denied: file belongs to another user.")
@@ -692,7 +710,7 @@ async def _get_text(file_id: str, user_id: str) -> str:
         encrypted_data = await storage.get_object(storage_key)
     except KeyError:
         raise HTTPException(404, "Encrypted file missing from storage.")
-    
+
     raw_bytes = decrypt_file(encrypted_data)
     ext = meta["ext"]
 
@@ -749,8 +767,8 @@ async def api_summary(req: GenerateRequest, current_user: CurrentUser = Depends(
     with record_generation("summary", success=True):
         summary, metadata = generate_summary(text)
     return SummaryResponse(
-        file_id=req.file_id, 
-        summary=summary, 
+        file_id=req.file_id,
+        summary=summary,
         status=GenerationStatus.OK,
         fallback_used=metadata.get("fallback_used", False),
         fallback_reason=metadata.get("fallback_reason"),
@@ -838,7 +856,7 @@ async def api_audio(req: GenerateRequest, current_user: CurrentUser = Depends(re
     text = await _get_text(req.file_id, current_user.uid)
     log.info(f"Generating audio for {req.file_id} (user: {current_user.uid})")
 
-    summary  = generate_summary(text)
+    summary, _ = generate_summary(text)
     out_path = OUTPUT_DIR / f"{req.file_id}_audio.mp3"
 
     success = False
@@ -913,9 +931,9 @@ async def api_video(req: GenerateRequest, current_user: CurrentUser = Depends(re
         "slides_only": GenerationStatus.SLIDES_ONLY,
         "placeholder": GenerationStatus.FAILED,
     }
-    
+
     video_status = status_map.get(metadata.get("status", "placeholder"), GenerationStatus.FAILED)
-    
+
     if video_status == GenerationStatus.OK:
         size = out_path.stat().st_size
         log.info(f"Video ready: {out_path} ({size} bytes)")
@@ -969,33 +987,31 @@ Manually delete an uploaded file and all its generated outputs.
         429: {"description": "Rate limit exceeded", "model": ErrorResponse},
     },
 )
-async def manual_cleanup(request: Request, file_id: str, current_user: CurrentUser = Depends(require_auth), _rate_limit: None = Depends(lambda r: rate_limit(r, "30/minute"))) -> CleanupResponse:
+async def manual_cleanup(request: Request, file_id: str, current_user: CurrentUser = Depends(require_auth), _rate_limit: None = Depends(rate_limit_cleanup)) -> CleanupResponse:
     with FILE_STORE_LOCK:
         if file_id not in FILE_STORE:
             raise HTTPException(404, "File ID not found.")
         meta = FILE_STORE[file_id]
-        
+
         # Verify user owns this file
         if meta.get("user_id") != current_user.uid:
             raise HTTPException(403, "Access denied: file belongs to another user.")
-        
+
         FILE_STORE.pop(file_id)
-    
-    p = Path(meta["path"])
-    if p.exists():
-        p.unlink()
+
+    # Delete generated output files
     for suffix in ["_audio.mp3", "_video.mp4", "_video_slides.zip"]:
         out = OUTPUT_DIR / f"{file_id}{suffix}"
         if out.exists():
             out.unlink()
-    
+
     # Also delete from storage backend
     storage = get_storage_backend()
     try:
         await storage.delete_object(meta["storage_key"])
     except Exception as e:
         log.warning(f"Failed to delete from storage: {e}")
-    
+
     return CleanupResponse(status="deleted", file_id=file_id)
 
 
@@ -1025,7 +1041,7 @@ Returns a job_id immediately. Poll `/jobs/{job_id}` for status updates.
         429: {"description": "Rate limit exceeded", "model": ErrorResponse},
     },
 )
-async def create_generation_job(request: Request, job_req: JobCreateRequest, current_user: CurrentUser = Depends(require_auth), _rate_limit: None = Depends(lambda r: rate_limit(r, "10/minute"))) -> JobCreateResponse:
+async def create_generation_job(request: Request, job_req: JobCreateRequest, current_user: CurrentUser = Depends(require_auth), _rate_limit: None = Depends(rate_limit_jobs)) -> JobCreateResponse:
     # Verify file exists and user owns it
     with FILE_STORE_LOCK:
         if job_req.file_id not in FILE_STORE:
@@ -1033,12 +1049,12 @@ async def create_generation_job(request: Request, job_req: JobCreateRequest, cur
         meta = FILE_STORE[job_req.file_id]
         if meta.get("user_id") != current_user.uid:
             raise HTTPException(403, "Access denied: file belongs to another user.")
-    
+
     job = create_job(job_req.file_id, job_req.generation_type, current_user.uid)
-    
+
     # Submit to thread pool for background execution
     _generation_executor.submit(run_generation_job, job.job_id)
-    
+
     return JobCreateResponse(
         job_id=job.job_id,
         status=JobStatus.PENDING,
@@ -1075,11 +1091,11 @@ async def get_job_status(job_id: str, current_user: CurrentUser = Depends(requir
     job = get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
-    
+
     # Verify user owns this job
     if job.user_id != current_user.uid:
         raise HTTPException(403, "Access denied: job belongs to another user.")
-    
+
     return JobStatusResponse(
         job_id=job.job_id,
         file_id=job.file_id,
@@ -1096,15 +1112,15 @@ async def get_job_status(job_id: str, current_user: CurrentUser = Depends(requir
 
 @app.get(
     "/jobs",
-    response_model=List[JobStatusResponse],
+    response_model=list[JobStatusResponse],
     tags=[Tags.ASYNC_GENERATION],
     summary="List user's jobs",
     description="List all generation jobs for the current user.",
 )
-async def list_jobs(current_user: CurrentUser = Depends(require_auth)) -> List[JobStatusResponse]:
+async def list_jobs(current_user: CurrentUser = Depends(require_auth)) -> list[JobStatusResponse]:
     with JOB_STORE_LOCK:
         jobs = [j for j in JOB_STORE.values() if j.user_id == current_user.uid]
-    
+
     result = []
     for job in jobs:
         result.append(JobStatusResponse(
@@ -1119,7 +1135,7 @@ async def list_jobs(current_user: CurrentUser = Depends(require_auth)) -> List[J
             result=job.result,
             error=job.error,
         ))
-    
+
     # Sort by creation time (newest first)
     result.sort(key=lambda j: j.created_at, reverse=True)
     return result
@@ -1164,18 +1180,18 @@ async def job_progress_websocket(websocket: WebSocket, job_id: str):
         auth_header = websocket.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
-    
+
     if not token:
         await websocket.close(code=4001, reason="Missing authentication token")
         return
-    
+
     # Verify token
     from .auth import get_firebase_auth
     auth = get_firebase_auth()
     if auth is None:
         await websocket.close(code=4001, reason="Authentication not configured")
         return
-    
+
     try:
         decoded_token = auth.verify_id_token(token)
         user_id = decoded_token.get("uid")
@@ -1185,20 +1201,20 @@ async def job_progress_websocket(websocket: WebSocket, job_id: str):
     except Exception:
         await websocket.close(code=4001, reason="Invalid or expired token")
         return
-    
+
     # Verify job exists and user owns it
     job = get_job(job_id)
     if not job:
         await websocket.close(code=4004, reason="Job not found")
         return
-    
+
     if job.user_id != user_id:
         await websocket.close(code=4003, reason="Access denied: job belongs to another user")
         return
-    
+
     ws_manager = get_ws_manager()
     await ws_manager.connect(websocket, job_id)
-    
+
     try:
         # Send initial status
         await ws_manager.send_progress(
@@ -1208,7 +1224,7 @@ async def job_progress_websocket(websocket: WebSocket, job_id: str):
             result=job.result,
             error=job.error,
         )
-        
+
         # Keep connection alive, listen for client messages (ping/pong)
         while True:
             try:
@@ -1217,12 +1233,12 @@ async def job_progress_websocket(websocket: WebSocket, job_id: str):
                 # Echo back or handle client commands
                 if data == "ping":
                     await websocket.send_text(json.dumps({"type": "pong"}))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Send keepalive
                 await websocket.send_text(json.dumps({"type": "keepalive"}))
             except WebSocketDisconnect:
                 break
-    
+
     except WebSocketDisconnect:
         pass
     except Exception as e:
