@@ -203,14 +203,12 @@ body {
 /* ── HEADER ─────────────────────────────────────────────────────── */
 .site-header {
   position: sticky; top: 0; z-index: 100;
-  background: rgba(251, 246, 240, 0.9);
+  background: var(--surface);
   backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--border-color);
   padding: 1rem 0;
   height: var(--header-height);
-}
-[data-theme="dark"] .site-header {
-  background: rgba(13, 58, 53, 0.9);
+  box-shadow: var(--shadow-sm);
 }
 .header-inner {
   max-width: var(--container-max); margin: 0 auto; padding: 0 var(--container-padding);
