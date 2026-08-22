@@ -76,7 +76,7 @@ function createThemeToggle() {
   toggle.className = "theme-toggle";
   toggle.setAttribute("aria-label", "Toggle theme");
   toggle.innerHTML = `
-    <span class="theme-toggle-icon" aria-hidden="true">☀</span>
+    <span class="theme-toggle-icon" aria-hidden="true"></span>
   `;
   toggle.addEventListener("click", () => {
     const current = document.documentElement.getAttribute("data-theme");
@@ -209,7 +209,8 @@ function renderFileQueue() {
       <div class="queue-info">
         <div class="queue-name">${escapeHtml(item.file.name)}</div>
         <div class="queue-status">${getStatusText(item.status)}</div>
-        ${item.status === "uploading" ? `<div class="queue-progress skeleton"></div>` : ""}
+        ${(item.status === "uploading" || item.status === "completed" || item.status === "error") ? 
+          `<div class="queue-progress ${item.status === "uploading" ? "skeleton" : ""}" style="width: ${item.status === "completed" ? "100%" : item.status === "error" ? "100%" : "0%"}; background: ${item.status === "completed" ? "linear-gradient(90deg, var(--success), var(--success-light))" : item.status === "error" ? "var(--error)" : ""}"></div>` : ""}
       </div>
       <button class="queue-remove" onclick="removeFromQueue('${item.id}')" aria-label="Remove file">&times;</button>
     </div>
@@ -244,15 +245,49 @@ window.removeFromQueue = function(id) {
 };
 
 async function processQueue() {
+  const uploadProgress = document.getElementById("uploadProgress");
+  const uploadProgressFill = document.getElementById("uploadProgressFill");
+  const uploadProgressText = document.getElementById("uploadProgressText");
+  const uploadSpeed = document.getElementById("uploadSpeed");
+  
   for (const item of fileQueue) {
     if (item.status !== "pending") continue;
     
     item.status = "uploading";
     renderFileQueue();
     
+    // Show main progress bar for first file
+    if (!currentFile) {
+      uploadProgress.style.display = "block";
+      uploadProgressFill.style.width = "0%";
+      uploadProgressText.textContent = `Uploading ${item.file.name}...`;
+      uploadSpeed.textContent = "";
+    }
+    
     try {
-      showToast(`Uploading ${item.file.name}…`);
-      const data = await uploadFile(item.file);
+      const startTime = Date.now();
+      const data = await uploadFile(item.file, (percent, loaded, total) => {
+        if (!currentFile) {
+          uploadProgressFill.style.width = `${percent}%`;
+          uploadProgressText.textContent = `Uploading ${item.file.name}... ${percent}%`;
+          
+          // Calculate upload speed
+          const elapsed = (Date.now() - startTime) / 1000;
+          if (elapsed > 0) {
+            const speed = loaded / elapsed;
+            uploadSpeed.textContent = `${formatBytes(speed)}/s`;
+          }
+        }
+        
+        // Also update queue item progress
+        const queueItem = document.querySelector(`.queue-item[data-id="${item.id}"] .queue-progress`);
+        if (queueItem) {
+          queueItem.style.width = `${percent}%`;
+          queueItem.classList.remove("skeleton");
+          queueItem.style.background = "linear-gradient(90deg, var(--primary), var(--secondary))";
+        }
+      });
+      
       item.uploadedFileId = data.file_id;
       item.status = "completed";
       
@@ -263,6 +298,11 @@ async function processQueue() {
         fileName.textContent = item.file.name;
         fileSize.textContent = formatBytes(item.file.size);
         fileInfo.style.display = "flex";
+        
+        // Complete progress bar
+        uploadProgressFill.style.width = "100%";
+        uploadProgressText.textContent = "Upload complete!";
+        uploadSpeed.textContent = "";
         
         // Create Firestore session
         currentDocRef = await addDoc(collection(db, "sessions"), {
@@ -276,12 +316,31 @@ async function processQueue() {
           audioB64: null,
           videoUrl: null,
         });
+        
+        // Hide progress bar after delay
+        setTimeout(() => {
+          uploadProgress.style.display = "none";
+        }, 1500);
       }
       
       showSuccess(`${item.file.name} uploaded securely.`);
     } catch (err) {
       item.status = "error";
-      showError(`Failed to upload ${item.file.name}.`);
+      
+      // Show error in progress bar
+      if (!currentFile) {
+        uploadProgressFill.style.width = "100%";
+        uploadProgressFill.style.background = "var(--error)";
+        uploadProgressText.textContent = `Failed: ${err.message}`;
+        uploadSpeed.textContent = "";
+        
+        setTimeout(() => {
+          uploadProgress.style.display = "none";
+          uploadProgressFill.style.background = "";
+        }, 3000);
+      }
+      
+      showError(`Failed to upload ${item.file.name}: ${err.message}`);
       console.error(err);
     }
     
@@ -295,6 +354,16 @@ window.clearFile = function () {
   fileQueue = [];
   fileInfo.style.display = "none";
   fileInput.value = "";
+  
+  // Reset progress bar
+  const uploadProgress = document.getElementById("uploadProgress");
+  const uploadProgressFill = document.getElementById("uploadProgressFill");
+  if (uploadProgress) {
+    uploadProgress.style.display = "none";
+    uploadProgressFill.style.width = "0%";
+    uploadProgressFill.style.background = "";
+  }
+  
   const banner = document.getElementById("viewNotesBtn");
   if (banner) banner.remove();
   const queueContainer = document.getElementById("fileQueue");

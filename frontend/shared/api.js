@@ -100,32 +100,54 @@ export async function generateOutput(type, fileId) {
 }
 
 /**
- * Upload file to backend
+ * Upload file to backend with progress tracking
  * @param {File} file - File to upload
+ * @param {Function} onProgress - Optional callback(progress: number, loaded: number, total: number)
  * @returns {Promise<Object>} Upload result with file_id
  */
-export async function uploadFile(file) {
-  const base = getApiBase();
-  const formData = new FormData();
-  formData.append("file", file);
-  
-  const idToken = await getIdToken();
-  const headers = {};
-  if (idToken) {
-    headers["Authorization"] = `Bearer ${idToken}`;
-  }
-  
-  const resp = await fetch(`${base}/upload`, {
-    method: "POST",
-    headers,
-    body: formData
+export function uploadFile(file, onProgress) {
+  return new Promise(async (resolve, reject) => {
+    const base = getApiBase();
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    const idToken = await getIdToken();
+    const xhr = new XMLHttpRequest();
+    
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable && onProgress) {
+        const percent = Math.round((e.loaded / e.total) * 100);
+        onProgress(percent, e.loaded, e.total);
+      }
+    });
+    
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          resolve(data);
+        } catch (e) {
+          reject(new Error("Invalid response from server"));
+        }
+      } else {
+        reject(new Error(`Upload failed: ${xhr.status} ${xhr.responseText}`));
+      }
+    });
+    
+    xhr.addEventListener("error", () => {
+      reject(new Error("Network error during upload"));
+    });
+    
+    xhr.addEventListener("abort", () => {
+      reject(new Error("Upload cancelled"));
+    });
+    
+    xhr.open("POST", `${base}/upload`);
+    if (idToken) {
+      xhr.setRequestHeader("Authorization", `Bearer ${idToken}`);
+    }
+    xhr.send(formData);
   });
-  
-  if (!resp.ok) {
-    throw new Error(`Upload failed: ${resp.status}`);
-  }
-  
-  return resp.json();
 }
 
 /**

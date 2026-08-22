@@ -20,7 +20,7 @@
       </div>
       <nav class="header-nav">
         <a href="#upload-section">Upload</a>
-        <a href="#architecture-section">Architecture</a>
+        <a href="#generate-section">Generate</a>
       </nav>
       <div class="header-right">
         <a href="my-notes.html" class="btn-my-notes">📚 My Notes</a>
@@ -37,19 +37,17 @@
   <section class="hero">
     <div class="hero-bg"><div class="grid-overlay"></div></div>
     <div class="hero-content">
-      <div class="hero-tag">🎓 HTML Course — Advanced Topics in Machine Learning</div>
-      <h1 class="hero-title">Your AI-Powered<br/><em>Study Assistant</em></h1>
+      <div class="hero-tag">🎓 Intelligent Study Assistant</div>
+      <h1 class="hero-title">Transform Documents<br/>Into <em>Knowledge</em></h1>
       <p class="hero-subtitle">
-        Upload any PDF or PowerPoint. Receive an intelligent summary, a 10-question quiz,
-        audio narration, and a video explanation.
+        Upload any PDF or PowerPoint. Get AI-powered summaries, interactive quizzes,
+        audio narrations, and explainer videos — all in one place.
       </p>
       <div class="hero-tech-pills">
-        <span>Pegasus Summarization</span>
-        <span>BGE Embeddings</span>
-        <span>Autoencoder</span>
-        <span>T5 Quiz Generation</span>
-        <span>gTTS Audio</span>
-        <span>MoviePy Video</span>
+        <span>🧠 Summary</span>
+        <span>❓ Quiz</span>
+        <span>🔊 Audio</span>
+        <span>🎬 Video</span>
       </div>
     </div>
   </section>
@@ -76,6 +74,16 @@
         <button class="btn-remove" onclick="clearFile()">✕</button>
       </div>
 
+      <div class="upload-progress" id="uploadProgress" style="display:none">
+        <div class="upload-progress-bar">
+          <div class="upload-progress-fill" id="uploadProgressFill"></div>
+        </div>
+        <div class="upload-progress-info">
+          <span id="uploadProgressText">Uploading...</span>
+          <span id="uploadSpeed" class="upload-speed"></span>
+        </div>
+      </div>
+
       <div class="security-notice">
         <span class="lock-icon">🔒</span>
         Files are encrypted with AES-256 before transmission. Results are saved to your account.
@@ -84,11 +92,11 @@
   </section>
 
   <!-- GENERATE -->
-  <section class="generate-section">
+  <section id="generate-section" class="generate-section">
     <div class="container">
       <div class="section-label">Step 02</div>
       <h2 class="section-title">Generate AI Outputs</h2>
-      <p class="section-desc">Each button triggers a distinct ML pipeline component on the backend</p>
+      <p class="section-desc">Transform your documents into intelligent study materials with one click</p>
 
       <div class="generate-grid">
 
@@ -96,7 +104,7 @@
           <div class="gen-card-icon">🧠</div>
           <div class="gen-card-info">
             <h3>Summary</h3>
-            <p>Pegasus abstractive summarization via BGE embeddings + Autoencoder compression</p>
+            <p>AI-powered abstractive summarization with key insights extraction</p>
             <div class="gen-card-tags"><span>Pegasus</span><span>NLP</span></div>
           </div>
           <button class="btn-generate" onclick="generateOutput('summary')" id="btn-summary">
@@ -109,7 +117,7 @@
           <div class="gen-card-icon">❓</div>
           <div class="gen-card-info">
             <h3>Quiz</h3>
-            <p>10 MCQ questions with options, correct answers and reasoning via T5 QG model</p>
+            <p>10 interactive MCQs with answers and detailed explanations</p>
             <div class="gen-card-tags"><span>T5</span><span>MCQ</span></div>
           </div>
           <button class="btn-generate" onclick="generateOutput('quiz')" id="btn-quiz">
@@ -122,7 +130,7 @@
           <div class="gen-card-icon">🔊</div>
           <div class="gen-card-info">
             <h3>Audio</h3>
-            <p>Text-to-speech narration of the summary using gTTS engine</p>
+            <p>Natural text-to-speech narration for on-the-go learning</p>
             <div class="gen-card-tags"><span>gTTS</span><span>TTS</span></div>
           </div>
           <button class="btn-generate" onclick="generateOutput('audio')" id="btn-audio">
@@ -135,7 +143,7 @@
           <div class="gen-card-icon">🎬</div>
           <div class="gen-card-info">
             <h3>Video</h3>
-            <p>Slide-style explainer video built with MoviePy, duration based on content length</p>
+            <p>Slide-style explainer video with visuals and narration</p>
             <div class="gen-card-tags"><span>MoviePy</span><span>PIL</span></div>
           </div>
           <button class="btn-generate" onclick="generateOutput('video')" id="btn-video">
@@ -157,85 +165,7 @@
     </div>
   </section>
 
-  <!-- ML ARCHITECTURE -->
-  <section id="architecture-section" class="architecture-section">
-    <div class="container">
-      <div class="section-label">System Design</div>
-      <h2 class="section-title">ML Pipeline Architecture</h2>
-      <p class="section-desc">End-to-end deep learning pipeline powering ScholarAI</p>
-
-      <div class="arch-diagram">
-        <div class="arch-stage">
-          <div class="arch-stage-icon">📤</div>
-          <div class="arch-stage-label">Input</div>
-          <div class="arch-stage-desc">PDF / PPTX<br/>AES-256 encrypted upload</div>
-        </div>
-        <div class="arch-arrow">→</div>
-        <div class="arch-stage">
-          <div class="arch-stage-icon">🔍</div>
-          <div class="arch-stage-label">Parse</div>
-          <div class="arch-stage-desc">PyMuPDF / python-pptx<br/>Text extraction</div>
-        </div>
-        <div class="arch-arrow">→</div>
-        <div class="arch-stage">
-          <div class="arch-stage-icon">🧹</div>
-          <div class="arch-stage-label">Preprocess</div>
-          <div class="arch-stage-desc">NLTK / spaCy<br/>Tokenize, clean</div>
-        </div>
-        <div class="arch-arrow">→</div>
-        <div class="arch-stage highlight-stage">
-          <div class="arch-stage-icon">🔷</div>
-          <div class="arch-stage-label">Embed + AE</div>
-          <div class="arch-stage-desc">BGE → Autoencoder<br/>Semantic compression</div>
-        </div>
-        <div class="arch-arrow">→</div>
-        <div class="arch-stage">
-          <div class="arch-stage-icon">🤖</div>
-          <div class="arch-stage-label">ML Models</div>
-          <div class="arch-stage-desc">Pegasus · T5 QG<br/>gTTS · MoviePy</div>
-        </div>
-        <div class="arch-arrow">→</div>
-        <div class="arch-stage">
-          <div class="arch-stage-icon">📦</div>
-          <div class="arch-stage-label">Output</div>
-          <div class="arch-stage-desc">Summary · Quiz<br/>Audio · Video</div>
-        </div>
-      </div>
-
-      <div class="ae-detail">
-        <div class="ae-detail-header">
-          <span class="ae-icon">🔷</span>
-          <h3>Autoencoder Architecture — Advanced ML Component</h3>
-        </div>
-        <div class="ae-grid">
-          <div class="ae-block encoder">
-            <div class="ae-block-label">Encoder</div>
-            <div class="ae-layers">
-              <div class="ae-layer">Input: 384-dim (BGE)</div>
-              <div class="ae-layer">Dense 512 + ReLU</div>
-              <div class="ae-layer">Dense 256 + ReLU</div>
-              <div class="ae-layer ae-bottleneck">Latent: 128-dim ✦</div>
-            </div>
-          </div>
-          <div class="ae-arrow-mid">⟷</div>
-          <div class="ae-block decoder">
-            <div class="ae-block-label">Decoder</div>
-            <div class="ae-layers">
-              <div class="ae-layer ae-bottleneck">Latent: 128-dim ✦</div>
-              <div class="ae-layer">Dense 256 + ReLU</div>
-              <div class="ae-layer">Dense 512 + ReLU</div>
-              <div class="ae-layer">Output: 384-dim</div>
-            </div>
-          </div>
-        </div>
-        <p class="ae-desc">
-          The autoencoder compresses BGE embeddings to a 128-dimensional latent space,
-          removing redundancy while preserving semantic meaning. This compressed representation
-          feeds into Pegasus for cleaner, more coherent summaries.
-        </p>
-      </div>
-    </div>
-  </section>
+  
 
   <!-- FOOTER -->
   <footer class="site-footer">
