@@ -8,9 +8,9 @@
  * @returns {string} Formatted string (B, KB, MB)
  */
 export function formatBytes(b) {
-  if (b < 1024) return b + " B";
-  if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
-  return (b / 1048576).toFixed(1) + " MB";
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1048576).toFixed(1) + ' MB';
 }
 
 /**
@@ -19,13 +19,13 @@ export function formatBytes(b) {
  * @returns {string} Escaped string
  */
 export function escapeHtml(str) {
-  if (!str) return "";
+  if (!str) return '';
   return String(str)
-    .replace(/&/g, "&")
-    .replace(/</g, "<")
-    .replace(/>/g, ">")
-    .replace(/"/g, """)
-    .replace(/'/g, "&#039;");
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+    .replace(/\"/g, '"')
+    .replace(/'/g, '&#039;');
 }
 
 /**
@@ -54,7 +54,7 @@ export function delay(ms) {
 export function copyText(id, showToast) {
   const el = document.getElementById(id);
   if (!el) return;
-  navigator.clipboard.writeText(el.innerText).then(() => showToast("Copied!", "success"));
+  navigator.clipboard.writeText(el.innerText).then(() => showToast('Copied!', 'success'));
 }
 
 /**
@@ -63,9 +63,9 @@ export function copyText(id, showToast) {
  * @returns {string} Formatted date string
  */
 export function formatDate(timestamp) {
-  if (!timestamp?.toDate) return "";
-  return timestamp.toDate().toLocaleDateString("en-US", {
-    weekday: "short", month: "short", day: "numeric", year: "numeric"
+  if (!timestamp?.toDate) return '';
+  return timestamp.toDate().toLocaleDateString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
   });
 }
 
@@ -75,9 +75,9 @@ export function formatDate(timestamp) {
  * @returns {string} Short date string
  */
 export function formatShortDate(timestamp) {
-  if (!timestamp?.toDate) return "";
-  return timestamp.toDate().toLocaleDateString("en-US", {
-    month: "short", day: "numeric", year: "numeric"
+  if (!timestamp?.toDate) return '';
+  return timestamp.toDate().toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric'
   });
 }
 
@@ -87,7 +87,7 @@ export function formatShortDate(timestamp) {
  * @returns {string} ISO date string
  */
 export function formatISO(timestamp) {
-  if (!timestamp?.toDate) return "";
+  if (!timestamp?.toDate) return '';
   return timestamp.toDate().toISOString();
 }
 
