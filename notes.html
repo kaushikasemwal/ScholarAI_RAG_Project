@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="api-base" content="" />
+  <title>ScholarAI — Notes</title>
+  <link rel="stylesheet" href="styles.css"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">⬡</span>
+        <span class="logo-text">Scholar<em>AI</em></span>
+      </a>
+      <nav class="header-nav">
+        <a href="index.html">← Back to Upload</a>
+      </nav>
+      <div class="header-right">
+        <div class="user-pill" id="userPill" style="display:none">
+          <img class="user-avatar" id="userAvatar" src="" alt="avatar"/>
+          <span class="user-name" id="userName"></span>
+        </div>
+        <button class="btn-signout" id="signOutBtn" onclick="handleSignOut()" style="display:none">Sign Out</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- LOADING STATE -->
+  <div class="notes-loading" id="notesLoading">
+    <div class="notes-loading-spinner">⟳</div>
+    <p>Loading your notes…</p>
+  </div>
+
+  <!-- NOTES PAGE CONTENT -->
+  <main class="notes-page" id="notesPage" style="display:none">
+    <div class="container">
+
+      <!-- File header -->
+      <div class="notes-file-header">
+        <div class="notes-file-icon">📄</div>
+        <div class="notes-file-meta">
+          <h1 class="notes-file-name" id="notesFileName">Untitled</h1>
+          <div class="notes-file-info">
+            <span id="notesFileDate"></span>
+            <span id="notesFileSize"></span>
+          </div>
+        </div>
+        <div class="notes-badges" id="notesBadges"></div>
+      </div>
+
+      <!-- Tab navigation -->
+      <div class="notes-tabs" id="notesTabs">
+        <button class="notes-tab active" data-tab="summary" onclick="switchTab('summary')">🧠 Summary</button>
+        <button class="notes-tab" data-tab="quiz"    onclick="switchTab('quiz')">❓ Quiz</button>
+        <button class="notes-tab" data-tab="audio"   onclick="switchTab('audio')">🔊 Audio</button>
+        <button class="notes-tab" data-tab="video"   onclick="switchTab('video')">🎬 Video</button>
+      </div>
+
+      <!-- Tab panels -->
+      <div class="notes-tab-panels">
+
+        <!-- Summary -->
+        <div class="notes-panel" id="panel-summary">
+          <div class="notes-panel-header">
+            <h2>AI-Generated Summary</h2>
+            <button class="btn-copy" onclick="copyText('summaryText')">Copy</button>
+          </div>
+          <div class="notes-panel-body" id="summaryText"></div>
+          <div class="notes-panel-meta">
+            Model: google/pegasus-xsum &nbsp;·&nbsp; Pipeline: BGE → Autoencoder → Pegasus
+          </div>
+        </div>
+
+        <!-- Quiz -->
+        <div class="notes-panel" id="panel-quiz" style="display:none">
+          <div class="notes-panel-header">
+            <h2>10-Question Quiz</h2>
+            <button class="btn-start-quiz" id="btnStartQuiz" onclick="startQuiz()">▶ Start Quiz</button>
+          </div>
+          <div id="quizContent" class="quiz-body"></div>
+        </div>
+
+        <!-- Audio -->
+        <div class="notes-panel" id="panel-audio" style="display:none">
+          <div class="notes-panel-header"><h2>Audio Narration</h2></div>
+          <div class="notes-panel-body" id="audioBody">
+            <audio controls class="audio-player" id="audioPlayer" preload="metadata">
+              Your browser does not support HTML5 audio.
+            </audio>
+            <a class="btn-download" id="audioDownload" href="#" style="display:none">⬇ Download MP3</a>
+          </div>
+          <div class="notes-panel-meta">Engine: gTTS</div>
+        </div>
+
+        <!-- Video -->
+        <div class="notes-panel" id="panel-video" style="display:none">
+          <div class="notes-panel-header"><h2>Explainer Video</h2></div>
+          <div class="notes-panel-body" id="videoBody">
+            <video controls class="video-player" id="videoPlayer" preload="metadata">
+              Your browser does not support HTML5 video.
+            </video>
+            <a class="btn-download" id="videoDownload" href="#" style="display:none">⬇ Download MP4</a>
+          </div>
+          <div class="notes-panel-meta">Engine: MoviePy + PIL</div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <!-- Interactive Quiz Modal (reused from index) -->
+  <div class="quiz-modal-overlay" id="quizModal" style="display:none">
+    <div class="quiz-modal">
+      <div class="quiz-modal-header">
+        <span class="quiz-modal-title">📝 Quiz</span>
+        <div class="quiz-progress-wrap">
+          <div class="quiz-progress-bar" id="quizProgressBar"></div>
+        </div>
+        <span class="quiz-counter" id="quizCounter">1 / 10</span>
+        <button class="quiz-close-btn" onclick="closeQuiz()">✕</button>
+      </div>
+      <div class="quiz-modal-body">
+        <p class="quiz-question" id="quizQuestion"></p>
+        <div class="quiz-options" id="quizOptions"></div>
+        <div class="quiz-feedback" id="quizFeedback" style="display:none">
+          <div class="quiz-feedback-inner" id="quizFeedbackInner"></div>
+          <button class="btn-next-question" id="btnNext" onclick="nextQuestion()">Next Question →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-logo">⬡ ScholarAI</div>
+      <div class="footer-info">
+        Stop Googling. Start Scholar AI-ing.<br/>
+      </div>
+    </div>
+  </footer>
+
+  <script type="module" src="notes.js"></script>
+</body>
+</html>

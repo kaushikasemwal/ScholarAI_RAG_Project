@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="api-base" content="" />
+  <title>ScholarAI — My Notes</title>
+  <link rel="stylesheet" href="styles.css"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="index.html" class="logo">
+        <span class="logo-icon">⬡</span>
+        <span class="logo-text">Scholar<em>AI</em></span>
+      </a>
+      <nav class="header-nav">
+        <a href="index.html">← Upload New</a>
+      </nav>
+      <div class="header-right">
+        <div class="user-pill" id="userPill" style="display:none">
+          <img class="user-avatar" id="userAvatar" src="" alt="avatar"/>
+          <span class="user-name" id="userName"></span>
+        </div>
+        <button class="btn-signout" id="signOutBtn" onclick="handleSignOut()" style="display:none">Sign Out</button>
+      </div>
+    </div>
+  </header>
+
+  <main style="padding: 4rem 0 6rem">
+    <div class="container">
+
+      <div class="section-label">Your Library</div>
+      <h1 class="section-title" style="margin-bottom:0.4rem">My Notes</h1>
+      <p class="section-desc" style="margin-bottom:2rem">
+        All your uploaded documents and generated content, saved to your account.
+      </p>
+
+      <!-- Search / filter bar -->
+      <div class="notes-search-bar">
+        <input type="text" id="searchInput" placeholder="Search by file name…" oninput="filterNotes()"/>
+        <div class="notes-filter-pills" id="filterPills">
+          <button class="filter-pill active" data-filter="all"     onclick="setFilter('all')">All</button>
+          <button class="filter-pill"        data-filter="summary" onclick="setFilter('summary')">Summary</button>
+          <button class="filter-pill"        data-filter="quiz"    onclick="setFilter('quiz')">Quiz</button>
+          <button class="filter-pill"        data-filter="audio"   onclick="setFilter('audio')">Audio</button>
+          <button class="filter-pill"        data-filter="video"   onclick="setFilter('video')">Video</button>
+        </div>
+      </div>
+
+      <!-- Loading -->
+      <div class="notes-loading" id="notesLoading">
+        <div class="notes-loading-spinner">⟳</div>
+        <p>Loading your notes…</p>
+      </div>
+
+      <!-- Empty state -->
+      <div class="notes-empty" id="notesEmpty" style="display:none">
+        <div style="font-size:3rem;margin-bottom:1rem">📭</div>
+        <p>No notes yet. <a href="index.html" style="color:var(--amber)">Upload a document</a> to get started.</p>
+      </div>
+
+      <!-- Grid -->
+      <div class="history-grid" id="notesGrid" style="display:none"></div>
+
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-logo">⬡ ScholarAI</div>
+      <div class="footer-info">Advanced Topics in Machine Learning · HTML Course Project</div>
+    </div>
+  </footer>
+
+  <script type="module" src="my-notes.js"></script>
+</body>
+</html>
