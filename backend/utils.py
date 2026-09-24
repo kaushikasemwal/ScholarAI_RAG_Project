@@ -276,7 +276,7 @@ def decrypt_file(data: bytes) -> bytes:
         raise ValueError(f"Could not decrypt file with key v{version}. Key may have been rotated.") from e
 
 
-# ─── TEXT EXTRACTION ────────────────────────────────────────────
+# ─── TEXT EXTRACTION (LEGACY — backward compatible) ───────────────
 
 def extract_text_pdf(raw_bytes: bytes) -> str:
     """
@@ -389,6 +389,176 @@ def _clean_text(text: str) -> str:
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
 
     return text.strip()
+
+
+# ─── STRUCTURED DOCUMENT EXTRACTION (RAG Phase 1) ─────────────────
+# These functions return structured data with page/slide metadata
+# while preserving backward compatibility with existing extract_text_* functions.
+
+from dataclasses import dataclass
+from typing import List, Optional
+
+
+@dataclass
+class DocumentPage:
+    """Represents a single page/slide with its text content."""
+    page_number: int
+    text: str
+    metadata: dict
+
+
+@dataclass
+class StructuredDocument:
+    """Structured document representation preserving page/slide boundaries."""
+    file_id: str
+    filename: str
+    file_type: str  # "pdf" or "pptx"
+    pages: List[DocumentPage]
+    total_pages: int
+    metadata: dict
+
+
+def extract_pdf_pages(raw_bytes: bytes) -> List[DocumentPage]:
+    """
+    Extract text from PDF preserving page boundaries.
+    Returns list of DocumentPage objects with page numbers.
+    """
+    pages = []
+
+    # Method 1: PyMuPDF
+    try:
+        import fitz  # PyMuPDF
+
+        doc = fitz.open(stream=raw_bytes, filetype="pdf")
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            text = page.get_text("text")
+            cleaned = _clean_text(text)
+            pages.append(DocumentPage(
+                page_number=page_num + 1,
+                text=cleaned,
+                metadata={"source": "pymupdf", "page_index": page_num}
+            ))
+        doc.close()
+        log.info(f"PyMuPDF extracted {len(pages)} pages from PDF")
+        return pages
+
+    except ImportError:
+        log.info("PyMuPDF not available, trying pdfplumber…")
+    except Exception as e:
+        log.warning(f"PyMuPDF failed: {e}, trying pdfplumber…")
+
+    # Method 2: pdfplumber
+    try:
+        import pdfplumber
+
+        with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
+            for page_num, page in enumerate(pdf.pages):
+                t = page.extract_text()
+                if t:
+                    cleaned = _clean_text(t)
+                    pages.append(DocumentPage(
+                        page_number=page_num + 1,
+                        text=cleaned,
+                        metadata={"source": "pdfplumber", "page_index": page_num}
+                    ))
+        log.info(f"pdfplumber extracted {len(pages)} pages from PDF")
+        return pages
+
+    except ImportError:
+        log.warning("pdfplumber not available. Install: pip install pdfplumber")
+    except Exception as e:
+        log.error(f"pdfplumber failed: {e}")
+
+    # Method 3: PyPDF2
+    try:
+        import PyPDF2
+
+        reader = PyPDF2.PdfReader(io.BytesIO(raw_bytes))
+        for page_num, page in enumerate(reader.pages):
+            t = page.extract_text() or ""
+            cleaned = _clean_text(t)
+            if cleaned:
+                pages.append(DocumentPage(
+                    page_number=page_num + 1,
+                    text=cleaned,
+                    metadata={"source": "pypdf2", "page_index": page_num}
+                ))
+        log.info(f"PyPDF2 extracted {len(pages)} pages from PDF")
+        return pages
+
+    except ImportError:
+        log.warning("No PDF library available. Install: pip install pymupdf")
+        return [DocumentPage(page_number=1, text="Could not extract PDF text. Please install PyMuPDF: pip install pymupdf", metadata={"error": True})]
+    except Exception as e:
+        log.error(f"All PDF extraction methods failed: {e}")
+        return []
+
+
+def extract_pptx_slides(raw_bytes: bytes) -> List[DocumentPage]:
+    """
+    Extract text from PPTX preserving slide boundaries.
+    Returns list of DocumentPage objects with slide numbers.
+    """
+    try:
+        from pptx import Presentation
+
+        prs = Presentation(io.BytesIO(raw_bytes))
+        pages = []
+
+        for slide_num, slide in enumerate(prs.slides):
+            texts = []
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text.strip():
+                    texts.append(shape.text.strip())
+            if texts:
+                cleaned = _clean_text("\n".join(texts))
+                pages.append(DocumentPage(
+                    page_number=slide_num + 1,
+                    text=cleaned,
+                    metadata={"source": "python-pptx", "slide_index": slide_num}
+                ))
+
+        log.info(f"python-pptx extracted {len(pages)} slides from PPTX")
+        return pages
+
+    except ImportError:
+        log.warning("python-pptx not available. Install: pip install python-pptx")
+        return [DocumentPage(page_number=1, text="Could not extract PPTX text. Please install python-pptx.", metadata={"error": True})]
+    except Exception as e:
+        log.error(f"PPTX extraction failed: {e}")
+        return []
+
+
+def extract_structured_document(
+    raw_bytes: bytes,
+    file_id: str,
+    filename: str,
+    file_type: str
+) -> StructuredDocument:
+    """
+    Extract structured document with page/slide metadata.
+    This is the main entry point for RAG document ingestion.
+    """
+    if file_type.lower() == "pdf":
+        pages = extract_pdf_pages(raw_bytes)
+    elif file_type.lower() in ("pptx", "ppt"):
+        pages = extract_pptx_slides(raw_bytes)
+    elif file_type.lower() in ("txt", "text"):
+        # Plain text - treat as single page
+        text = _clean_text(raw_bytes.decode("utf-8", errors="ignore"))
+        pages = [DocumentPage(page_number=1, text=text, metadata={"source": "text"})]
+    else:
+        raise ValueError(f"Unsupported file type: {file_type}")
+
+    return StructuredDocument(
+        file_id=file_id,
+        filename=filename,
+        file_type=file_type.lower(),
+        pages=pages,
+        total_pages=len(pages),
+        metadata={"extraction_timestamp": time.time()}
+    )
 
 
 # ─── FILE CLEANUP ───────────────────────────────────────────────

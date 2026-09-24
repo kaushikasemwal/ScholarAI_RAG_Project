@@ -8,6 +8,11 @@ uvicorn[standard]>=0.24.0
 python-multipart>=0.0.6
 slowapi>=0.1.9
 
+# ── RAG Dependencies ─────────────────────────────────────────────
+chromadb>=1.5.0
+langchain-core>=1.6.0
+langchain-text-splitters>=0.1.0
+
 # ── ML Core ─────────────────────────────────────────────────────
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.5.1+cpu

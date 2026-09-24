@@ -1,6 +1,6 @@
 """
 conftest.py — Shared Test Configuration
-========================================
+======================================
 Common fixtures and configuration for all tests.
 """
 
@@ -18,6 +18,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 os.environ["LOG_JSON"] = "false"
 os.environ["ALLOWED_ORIGINS"] = "*"
 os.environ["FIREBASE_SERVICE_ACCOUNT_JSON"] = "{}"
+
+# Initialize model manager for tests
+from backend.models import register_default_models
+register_default_models()
 
 from backend.app import app
 

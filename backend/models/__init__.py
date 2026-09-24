@@ -204,6 +204,11 @@ def register_default_models() -> ModelManager:
     return manager
 
 
+# Auto-register default models on module import for direct usage
+# (FastAPI lifespan also calls this at startup; registration is idempotent)
+register_default_models()
+
+
 # ─── PRIVATE LOADER FUNCTIONS ────────────────────────────────────
 
 def _load_sbert():

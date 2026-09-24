@@ -57,7 +57,7 @@ from .observability import (
     setup_logging,
 )
 from .observability.health import HealthStatus
-from .quiz_generator import generate_quiz
+from .quiz_generator import generate_quiz as generate_quiz_legacy
 from .rate_limit import get_rate_limiter
 from .schemas import (
     AudioResponse,
@@ -83,6 +83,20 @@ from .tts_generator import generate_audio
 from .utils import decrypt_file, encrypt_file
 from .video_generator import generate_video
 from .websocket import get_ws_manager
+# RAG imports
+from .rag import (
+    generate_rag_quiz,
+    MultiQuestionConfig,
+    RetrievalConfig,
+    GeneratorConfig,
+    VectorStoreConfig,
+    EmbeddingConfig,
+    LocalVectorStore,
+    BGEEmbeddings,
+    create_retriever,
+    create_grounded_generator,
+)
+from .rag.quiz_adapter import rag_questions_to_api_format
 
 # ─── SETTINGS ──────────────────────────────────────────────────────
 settings = get_settings()
@@ -776,25 +790,151 @@ async def api_summary(req: GenerateRequest, current_user: CurrentUser = Depends(
     )
 
 
+# ─── RAG QUIZ GENERATION HELPER ─────────────────────────────────────
+
+async def generate_quiz_rag(file_id: str, user_id: str, num_questions: int = 10) -> tuple[list, bool, str | None]:
+    """
+    Generate quiz using RAG pipeline with fallback to legacy generator.
+    
+    Returns:
+        (questions_list, used_fallback, fallback_reason)
+    """
+    try:
+        # Configure RAG components
+        vector_store_config = VectorStoreConfig(
+            persist_directory=settings.RAG_VECTOR_STORE_DIR,
+            collection_name=settings.RAG_COLLECTION_NAME,
+            distance_metric=settings.RAG_DISTANCE_METRIC,
+        )
+        
+        embedding_config = EmbeddingConfig(
+            model_name=settings.SBERT_MODEL,
+            expected_dimension=768,
+        )
+        
+        retrieval_config = RetrievalConfig(
+            top_k=settings.RAG_TOP_K,
+        )
+        
+        generator_config = GeneratorConfig(
+            max_context_chunks=settings.RAG_TOP_K,
+            temperature=0.7,
+            difficulty="medium",
+        )
+        
+        multi_config = MultiQuestionConfig(
+            num_questions=num_questions,
+            top_k_per_question=settings.RAG_TOP_K,
+            diversity_threshold=0.75,
+        )
+        
+        # Ensure document is ingested into vector store
+        await _ensure_document_ingested(file_id, user_id, vector_store_config, embedding_config)
+        
+        # Generate quiz using RAG
+        rag_questions = generate_rag_quiz(
+            user_id=user_id,
+            document_id=file_id,
+            num_questions=num_questions,
+            retriever_config=retrieval_config,
+            generator_config=generator_config,
+            embedding_config=embedding_config,
+            vector_store_config=vector_store_config,
+            multi_config=multi_config,
+        )
+        
+        # Convert to API format
+        api_response = rag_questions_to_api_format(rag_questions, file_id)
+        questions = api_response["questions"]
+        
+        if not questions:
+            raise ValueError("RAG pipeline returned no valid questions")
+        
+        log.info(f"RAG quiz generation successful: {len(questions)} questions for {file_id}")
+        return questions, False, None
+        
+    except Exception as e:
+        log.warning(f"RAG quiz generation failed for {file_id}: {e}")
+        # Fallback to legacy generator
+        log.info(f"Falling back to legacy quiz generator for {file_id}")
+        try:
+            text = await _get_text(file_id, user_id)
+            questions = generate_quiz_legacy(text, n=num_questions)
+            return questions, True, f"RAG failed: {str(e)[:200]}"
+        except Exception as fallback_error:
+            log.error(f"Legacy quiz generation also failed for {file_id}: {fallback_error}")
+            raise
+
+
+async def _ensure_document_ingested(
+    file_id: str,
+    user_id: str,
+    vector_store_config: VectorStoreConfig,
+    embedding_config: EmbeddingConfig
+) -> None:
+    """
+    Ensure document is ingested into the RAG vector store.
+    Idempotent - safe to call multiple times.
+    """
+    try:
+        from .rag import ingest_from_file_id, IngestionConfig, ChunkConfig
+        
+        ingestion_config = IngestionConfig(
+            chunk_config=ChunkConfig(
+                chunk_size=settings.RAG_CHUNK_SIZE,
+                chunk_overlap=settings.RAG_CHUNK_OVERLAP,
+            ),
+            vector_store_config=vector_store_config,
+            vector_store_type="chroma",
+        )
+        
+        # Run ingestion in thread pool since it's CPU-intensive
+        import asyncio
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            _generation_executor,
+            ingest_from_file_id,
+            file_id,
+            user_id,
+            ingestion_config,
+            None,  # vector_store (will be created)
+            None,  # embeddings (will be created)
+        )
+        log.info(f"Document {file_id} ingested for RAG")
+        
+    except Exception as e:
+        # Log but don't fail - the generate_rag_quiz will fail gracefully if ingestion didn't work
+        log.warning(f"Document ingestion for RAG failed (may already exist): {e}")
+
+
 @app.post(
     "/generate/quiz",
     response_model=QuizResponse,
     tags=[Tags.GENERATION],
     summary="Generate MCQ quiz",
     description="""
-Generate a 10-question multiple-choice quiz using T5 question generation:
+Generate a 10-question multiple-choice quiz using RAG-grounded generation:
 
-1. **Chunking** → Split text into ~400-char overlapping chunks
-2. **Question Generation** → valhalla/t5-base-qg-hl with `<hl>` answer highlighting
-3. **Distractor Generation** → TF-IDF keyword extraction from source chunk
-4. **Diversity Filtering** → BGE embeddings + Max-Min diversity selection
-5. **Fallback** → Rule-based pattern matching if T5 unavailable
+1. **Document Ingestion** → PDF/PPTX loaded with page/slide metadata
+2. **Chunking** → RecursiveCharacterTextSplitter with overlap
+3. **Embeddings** → BAAI/bge-base-en-v1.5 (768-dim)
+4. **Vector Store** → Chroma with user/document isolation
+5. **Retrieval** → Dense retrieval with user/document filtering
+6. **Generation** → FLAN-T5 grounded in retrieved context
+7. **Diversity** → Embedding-based deduplication across questions
+8. **Fallback** → Legacy T5 generator if RAG unavailable
 
 **Question Format:**
 - 4 options (A, B, C, D)
 - 1 correct answer with index (0-3)
 - Reasoning/explanation grounded in source text
-- Minimum 10 questions guaranteed (padded with generic if needed)
+- Provenance preserved internally (document_id, page/slide, chunk_id)
+
+**RAG Features:**
+- Every question grounded in retrieved evidence
+- User/document isolation enforced
+- Insufficient context handled gracefully
+- Diversity filtering prevents duplicate questions
 """,
     response_description="10 MCQ questions with answers and reasoning",
     responses={
@@ -804,11 +944,24 @@ Generate a 10-question multiple-choice quiz using T5 question generation:
     },
 )
 async def api_quiz(req: GenerateRequest, current_user: CurrentUser = Depends(require_auth)) -> QuizResponse:
-    text = await _get_text(req.file_id, current_user.uid)
-    log.info(f"Generating quiz for {req.file_id} (user: {current_user.uid})")
+    file_id = req.file_id
+    user_id = current_user.uid
+    num_questions = settings.QUIZ_QUESTIONS  # Default 10 from config
+    
+    log.info(f"Generating quiz for {file_id} (user: {user_id})")
+    
     with record_generation("quiz", success=True):
-        questions = generate_quiz(text, n=10)
-    return QuizResponse(file_id=req.file_id, questions=questions, status=GenerationStatus.OK)
+        questions, used_fallback, fallback_reason = await generate_quiz_rag(
+            file_id=file_id,
+            user_id=user_id,
+            num_questions=num_questions
+        )
+    
+    return QuizResponse(
+        file_id=file_id,
+        questions=questions,
+        status=GenerationStatus.OK
+    )
 
 
 @app.post(

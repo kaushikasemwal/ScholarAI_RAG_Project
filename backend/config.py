@@ -138,6 +138,17 @@ class Settings(BaseSettings):
     VIDEO_MIN_SLIDE_SECONDS: int = 5
     VIDEO_MAX_SLIDE_SECONDS: int = 20
 
+    # ─── RAG Settings (Phase 1) ─────────────────────────────────────
+    RAG_ENABLED: bool = True
+    RAG_VECTOR_STORE: str = "chroma"  # chroma, vectorize (future)
+    RAG_TOP_K: int = 5
+    RAG_CHUNK_SIZE: int = 500
+    RAG_CHUNK_OVERLAP: int = 100
+    RAG_SIMILARITY_THRESHOLD: float | None = None
+    RAG_VECTOR_STORE_DIR: str = "./chroma_db"
+    RAG_COLLECTION_NAME: str = "scholarai_documents"
+    RAG_DISTANCE_METRIC: str = "cosine"
+
     # ─── Firebase (Frontend) ──────────────────────────────────────
     FIREBASE_API_KEY: str | None = None
     FIREBASE_AUTH_DOMAIN: str | None = None
