@@ -15,7 +15,7 @@ except ImportError:
     LangChainEmbeddings = object
 
 from ..models import get_sbert
-from ..config import get_settings
+from ..config import get_settings, get_embedding_model_name, get_embedding_dimension
 
 
 @dataclass
@@ -43,7 +43,9 @@ class BGEEmbeddings(LangChainEmbeddings):
     def model(self):
         """Lazy-load the shared SBERT model."""
         if self._model is None:
-            self._model = get_sbert()
+            # Determine tier from config model_name
+            tier = "speed" if "bge-small" in self.config.model_name.lower() else "quality"
+            self._model = get_sbert(tier)
         return self._model
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -113,9 +115,14 @@ def get_embeddings(config: Optional[EmbeddingConfig] = None) -> BGEEmbeddings:
 def create_embedding_config_from_settings() -> EmbeddingConfig:
     """Create EmbeddingConfig from application settings."""
     settings = get_settings()
+    
+    # Use dedicated helper functions for tier-independent selection
+    model_name = get_embedding_model_name()
+    expected_dimension = get_embedding_dimension(model_name)
+    
     return EmbeddingConfig(
-        model_name=settings.SBERT_MODEL,
-        expected_dimension=768,  # BGE-base is 768-dim
+        model_name=model_name,
+        expected_dimension=expected_dimension,
         normalize_embeddings=True,
         batch_size=32,
     )

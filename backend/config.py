@@ -90,24 +90,52 @@ class Settings(BaseSettings):
     GENERATION_WORKERS: int = 2
     GENERATION_TIMEOUT_SECONDS: int = 300
 
-# ─── ML Models ────────────────────────────────────────────────
+    # ─── ML Models ────────────────────────────────────────────────
     # Model names (can override for different variants)
-    # Embeddings: BGE-base (768-dim) for better quality, or bge-large (1024-dim) for best
-    SBERT_MODEL: str = "BAAI/bge-base-en-v1.5"
+    # Embeddings: BGE-base (768-dim) for better quality, or bge-small (384-dim) for speed
+    RAG_EMBEDDING_MODEL: str = "BAAI/bge-base-en-v1.5"
+    RAG_EMBEDDING_DIMENSION: int = 768
     # Summarization: BART-large-CNN (stronger than Pegasus-xsum for general docs)
     PEGASUS_MODEL: str = "facebook/bart-large-cnn"
     # Quiz Generation: FLAN-T5-large (instruction-tuned, better QG than base T5)
-    T5_MODEL: str = "google/flan-t5-large"
+    RAG_GENERATION_MODEL: str = "google/flan-t5-large"
     SPACY_MODEL: str = "en_core_web_sm"
     
     # Alternative lighter models (for CPU/memory constrained environments)
-    SBERT_MODEL_LIGHT: str = "BAAI/bge-small-en-v1.5"
+    RAG_EMBEDDING_MODEL_LIGHT: str = "BAAI/bge-small-en-v1.5"
+    RAG_EMBEDDING_DIMENSION_LIGHT: int = 384
     PEGASUS_MODEL_LIGHT: str = "sshleifer/distilbart-cnn-12-6"
-    T5_MODEL_LIGHT: str = "google/flan-t5-base"
+    RAG_GENERATION_MODEL_LIGHT: str = "google/flan-t5-base"
     
-    # Model selection: "quality" | "balanced" | "speed"
+    # Embedding tier selection: "quality" | "speed"
+    RAG_EMBEDDING_TIER: str = "quality"
+    # Generation tier selection: "quality" | "speed"
+    RAG_GENERATION_TIER: str = "quality"
+    
+    # Model selection: "quality" | "balanced" | "speed" (legacy, deprecated)
+    # Controls generation tier only; embedding tier uses RAG_EMBEDDING_TIER
     MODEL_TIER: str = "quality"
     
+    # Backward compatibility aliases (deprecated, will be removed)
+    SBERT_MODEL: str = "BAAI/bge-base-en-v1.5"
+    SBERT_MODEL_LIGHT: str = "BAAI/bge-small-en-v1.5"
+    PEGASUS_MODEL: str = "facebook/bart-large-cnn"
+    PEGASUS_MODEL_LIGHT: str = "sshleifer/distilbart-cnn-12-6"
+    T5_MODEL: str = "google/flan-t5-large"
+    T5_MODEL_LIGHT: str = "google/flan-t5-base"
+    T5_MODEL: str = "google/flan-t5-large"
+    T5_MODEL_LIGHT: str = "google/flan-t5-base"
+    SBERT_MODEL: str = "BAAI/bge-base-en-v1.5"
+    SBERT_MODEL_LIGHT: str = "BAAI/bge-small-en-v1.5"
+    
+    # Embedding model -> dimension mapping (for validation)
+    # Centralized to avoid hardcoding in multiple places
+    EMBEDDING_MODEL_DIMENSIONS: dict[str, int] = {
+        "BAAI/bge-base-en-v1.5": 768,
+        "BAAI/bge-small-en-v1.5": 384,
+        "all-MiniLM-L6-v2": 384,
+    }
+
     # Autoencoder settings
     AUTOENCODER_INPUT_DIM: int = 768  # Matches BGE-base
     AUTOENCODER_LATENT_DIM: int = 256
@@ -148,6 +176,18 @@ class Settings(BaseSettings):
     RAG_VECTOR_STORE_DIR: str = "./chroma_db"
     RAG_COLLECTION_NAME: str = "scholarai_documents"
     RAG_DISTANCE_METRIC: str = "cosine"
+
+    # ─── RAG Settings (Phase 3) ──────────────────────────────────────
+    RAG_RETRIEVAL_MIN_SCORE: float = 0.5  # Minimum cosine similarity for retrieval
+    RAG_MAX_RETRIES: int = 3  # Max retries per question
+    RAG_ANSWER_MIN_SUPPORT_SCORE: float = 0.6  # Minimum semantic match for answer validation
+    RAG_DISTRACTOR_MIN_SIMILARITY: float = 0.2  # Minimum similarity for distractors
+    RAG_DISTRACTOR_MAX_SIMILARITY: float = 0.7  # Maximum similarity for distractors
+    RAG_DISTRACTOR_MAX_OVERLAP: float = 0.5  # Max word overlap with correct answer
+    RAG_QUESTION_MIN_LENGTH: int = 10  # Minimum question length (words)
+    RAG_QUESTION_MIN_LENGTH_ANSWER_FIRST: int = 6  # Minimum question length for answer-first approach
+    RAG_REJECT_GENERIC: bool = True  # Reject generic/template questions
+    RAG_REJECT_ARTIFACTS: bool = True  # Reject questions with PDF artifacts
 
     # ─── Firebase (Frontend) ──────────────────────────────────────
     FIREBASE_API_KEY: str | None = None
@@ -199,6 +239,64 @@ class Settings(BaseSettings):
     STORAGE_GCS_PROJECT: str | None = None
     STORAGE_GCS_CREDENTIALS: str | None = None
     STORAGE_GCS_PREFIX: str = ""
+
+
+# ─── HELPER FUNCTIONS ────────────────────────────────────────────
+
+
+def get_embedding_dimension(model_name: str | None = None) -> int:
+    """
+    Get the expected embedding dimension for a model.
+    
+    Args:
+        model_name: Embedding model name. If None, uses RAG_EMBEDDING_MODEL from settings.
+        
+    Returns:
+        Expected embedding dimension (768 for BGE-base, 384 for BGE-small).
+    """
+    settings = get_settings()
+    model = model_name or settings.RAG_EMBEDDING_MODEL
+    return settings.EMBEDDING_MODEL_DIMENSIONS.get(model, 768)
+
+
+def get_generation_model_name() -> str:
+    """
+    Get the configured generation model name based on RAG_GENERATION_TIER.
+    
+    Returns:
+        Model name for quiz generation (FLAN-T5).
+    """
+    settings = get_settings()
+    if settings.RAG_GENERATION_TIER == "speed":
+        return settings.RAG_GENERATION_MODEL_LIGHT
+    return settings.RAG_GENERATION_MODEL
+
+
+def get_summarization_model_name() -> str:
+    """
+    Get the configured summarization model name based on RAG_GENERATION_TIER.
+    
+    Returns:
+        Model name for summarization (BART).
+    """
+    settings = get_settings()
+    if settings.RAG_GENERATION_TIER == "speed":
+        return settings.PEGASUS_MODEL_LIGHT
+    return settings.PEGASUS_MODEL
+
+
+def get_embedding_model_name() -> str:
+    """
+    Get the configured embedding model name based on RAG_EMBEDDING_TIER.
+    
+    Returns:
+        Model name for embeddings (BGE).
+    """
+    settings = get_settings()
+    if settings.RAG_EMBEDDING_TIER == "speed":
+        return settings.RAG_EMBEDDING_MODEL_LIGHT
+    return settings.RAG_EMBEDDING_MODEL
+
 
 # Global settings instance
 _settings: Settings | None = None

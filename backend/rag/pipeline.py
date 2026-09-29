@@ -1,6 +1,6 @@
 """
 pipeline.py — RAG Ingestion Pipeline
-=====================================
+===================================
 Orchestrates the full document ingestion flow:
 load → chunk → embed → store
 """
@@ -11,8 +11,8 @@ import logging
 
 from .document_loader import load_document, LoadedDocument
 from .chunking import chunk_documents, ChunkConfig, ChunkResult
-from .embeddings import BGEEmbeddings, EmbeddingConfig, get_embeddings
-from .vectorstore import VectorStore, LocalVectorStore, VectorStoreConfig, create_vector_store
+from .embeddings import BGEEmbeddings, EmbeddingConfig, get_embeddings, create_embedding_config_from_settings
+from .vectorstore import VectorStore, LocalVectorStore, VectorStoreConfig, create_vector_store, create_vector_store_from_settings
 
 log = logging.getLogger(__name__)
 
@@ -77,11 +77,18 @@ def ingest_document(
         config = IngestionConfig()
 
     # Initialize dependencies if not provided
+    # Use settings-based config when not explicitly provided
     if vector_store is None:
-        vector_store = create_vector_store(config.vector_store_config, store_type=config.vector_store_type)
+        if config.vector_store_config is not None:
+            vector_store = create_vector_store(config.vector_store_config, store_type=config.vector_store_type)
+        else:
+            vector_store = create_vector_store_from_settings()
 
     if embeddings is None:
-        embeddings = get_embeddings(config.embedding_config)
+        if config.embedding_config is not None:
+            embeddings = get_embeddings(config.embedding_config)
+        else:
+            embeddings = get_embeddings(create_embedding_config_from_settings())
 
     # Step 1: Load document with structured metadata
     log.info(f"Loading document {file_id} ({filename})")
@@ -190,6 +197,23 @@ def ingest_from_file_id(
     storage = get_storage()
     encrypted_data = storage.get_object(meta["storage_key"])
     raw_bytes = decrypt_file(encrypted_data)
+
+    # Use settings-based config if not explicitly provided
+    if config is None:
+        config = IngestionConfig()
+    
+    # Initialize dependencies if not provided (will use settings-based defaults)
+    if vector_store is None:
+        if config.vector_store_config is not None:
+            vector_store = create_vector_store(config.vector_store_config, store_type=config.vector_store_type)
+        else:
+            vector_store = create_vector_store_from_settings()
+
+    if embeddings is None:
+        if config.embedding_config is not None:
+            embeddings = get_embeddings(config.embedding_config)
+        else:
+            embeddings = get_embeddings(create_embedding_config_from_settings())
 
     return ingest_document(
         raw_bytes=raw_bytes,

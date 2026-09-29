@@ -48,9 +48,19 @@ class Retriever:
         embeddings: BGEEmbeddings,
         config: Optional[RetrievalConfig] = None
     ):
+        from ..config import get_settings
+        settings = get_settings()
+        
         self.vector_store = vector_store
         self.embeddings = embeddings
-        self.config = config or RetrievalConfig()
+        
+        # Use settings default if not explicitly provided
+        if config is None:
+            config = RetrievalConfig()
+        if config.similarity_threshold is None:
+            config.similarity_threshold = settings.RAG_RETRIEVAL_MIN_SCORE
+            
+        self.config = config
 
     def retrieve(
         self,

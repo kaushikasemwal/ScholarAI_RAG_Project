@@ -800,17 +800,17 @@ async def generate_quiz_rag(file_id: str, user_id: str, num_questions: int = 10)
         (questions_list, used_fallback, fallback_reason)
     """
     try:
-        # Configure RAG components
+        # Configure RAG components using settings-based config
+        # This ensures embedding tier (RAG_EMBEDDING_TIER) and generation tier (RAG_GENERATION_TIER) are independent
         vector_store_config = VectorStoreConfig(
             persist_directory=settings.RAG_VECTOR_STORE_DIR,
             collection_name=settings.RAG_COLLECTION_NAME,
             distance_metric=settings.RAG_DISTANCE_METRIC,
         )
         
-        embedding_config = EmbeddingConfig(
-            model_name=settings.SBERT_MODEL,
-            expected_dimension=768,
-        )
+        # Use settings-based embedding config (respects RAG_EMBEDDING_TIER independently)
+        from .rag.embeddings import create_embedding_config_from_settings
+        embedding_config = create_embedding_config_from_settings()
         
         retrieval_config = RetrievalConfig(
             top_k=settings.RAG_TOP_K,
@@ -884,6 +884,7 @@ async def _ensure_document_ingested(
                 chunk_size=settings.RAG_CHUNK_SIZE,
                 chunk_overlap=settings.RAG_CHUNK_OVERLAP,
             ),
+            embedding_config=embedding_config,
             vector_store_config=vector_store_config,
             vector_store_type="chroma",
         )

@@ -1,6 +1,6 @@
 """
 vectorstore.py — Vector Store Abstraction for RAG
-==================================================
+================================================
 Provides a pluggable vector store interface with local Chroma implementation.
 Designed for future migration to Cloudflare Vectorize.
 """
@@ -21,12 +21,20 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
+# Collection metadata keys for embedding dimension tracking
+EMBEDDING_DIMENSION_KEY = "embedding_dimension"
+EMBEDDING_MODEL_KEY = "embedding_model"
+
+
 @dataclass
 class VectorStoreConfig:
     """Configuration for vector store."""
     persist_directory: str = "./chroma_db"
     collection_name: str = "scholarai_documents"
     distance_metric: str = "cosine"  # cosine, l2, ip
+    # Embedding dimension validation
+    expected_embedding_dimension: int = 768
+    embedding_model_name: str = "BAAI/bge-base-en-v1.5"
     # Future: Cloudflare Vectorize config
     vectorize_index_name: Optional[str] = None
     vectorize_account_id: Optional[str] = None
@@ -93,6 +101,7 @@ class LocalVectorStore(VectorStore):
     """
     Local Chroma-based vector store implementation.
     Provides document/user isolation via metadata filtering.
+    Includes embedding dimension validation to prevent mismatch.
     """
 
     def __init__(
@@ -105,6 +114,7 @@ class LocalVectorStore(VectorStore):
         self._client = None
         self._collection = None
         self._initialize()
+        self._validate_collection_dimension()
 
     def _initialize(self):
         """Initialize Chroma client and collection."""
@@ -128,12 +138,51 @@ class LocalVectorStore(VectorStore):
             )
         )
 
-        # Get or create collection
+        # Get or create collection with embedding metadata
         self._collection = self._client.get_or_create_collection(
             name=self.config.collection_name,
-            metadata={"hnsw:space": self.config.distance_metric}
+            metadata={
+                "hnsw:space": self.config.distance_metric,
+                EMBEDDING_DIMENSION_KEY: self.config.expected_embedding_dimension,
+                EMBEDDING_MODEL_KEY: self.config.embedding_model_name,
+            }
         )
-        log.info(f"Initialized Chroma collection: {self.config.collection_name}")
+        log.info(f"Initialized Chroma collection: {self.config.collection_name} "
+                 f"(expected dim: {self.config.expected_embedding_dimension}, "
+                 f"model: {self.config.embedding_model_name})")
+
+    def _validate_collection_dimension(self):
+        """Validate that the collection's embedding dimension matches configuration."""
+        try:
+            metadata = self._collection.metadata or {}
+            stored_dim = metadata.get(EMBEDDING_DIMENSION_KEY)
+            stored_model = metadata.get(EMBEDDING_MODEL_KEY)
+            
+            if stored_dim is not None and stored_dim != self.config.expected_embedding_dimension:
+                raise ValueError(
+                    f"Embedding dimension mismatch detected!\n"
+                    f"  Configured embedding model: {self.config.embedding_model_name}\n"
+                    f"  Configured dimension: {self.config.expected_embedding_dimension}\n"
+                    f"  Collection's stored dimension: {stored_dim}\n"
+                    f"  Collection's stored model: {stored_model}\n"
+                    f"\n"
+                    f"Resolution options:\n"
+                    f"  1. Set RAG_EMBEDDING_TIER to match the collection's dimension\n"
+                    f"  2. Use a different collection name (RAG_COLLECTION_NAME)\n"
+                    f"  3. Clear the existing ChromaDB data (delete {self.config.persist_directory})\n"
+                    f"  4. Set RAG_EMBEDDING_MODEL to a model with dimension {stored_dim}"
+                )
+            elif stored_dim is None:
+                # Collection exists but has no dimension metadata (legacy)
+                # Log warning but don't fail - will validate on first insert
+                log.warning(
+                    f"Collection '{self.config.collection_name}' has no embedding dimension metadata. "
+                    f"This may indicate legacy data. First insertion will validate dimension."
+                )
+        except ValueError:
+            raise
+        except Exception as e:
+            log.warning(f"Could not validate collection dimension: {e}")
 
     def add_documents(
         self,
@@ -150,6 +199,23 @@ class LocalVectorStore(VectorStore):
             raise ValueError(
                 f"Documents ({len(documents)}) and embeddings ({len(embeddings)}) count mismatch"
             )
+
+        # Validate embedding dimension on first insert
+        if embeddings:
+            actual_dim = len(embeddings[0])
+            if actual_dim != self.config.expected_embedding_dimension:
+                raise ValueError(
+                    f"Embedding dimension mismatch on insert!\n"
+                    f"  Expected dimension: {self.config.expected_embedding_dimension} "
+                    f"(from model: {self.config.embedding_model_name})\n"
+                    f"  Actual embedding dimension: {actual_dim}\n"
+                    f"\n"
+                    f"Resolution options:\n"
+                    f"  1. Ensure RAG_EMBEDDING_TIER matches the configured embedding model\n"
+                    f"  2. Set RAG_EMBEDDING_MODEL to a model with dimension {actual_dim}\n"
+                    f"  3. Use a different collection name (RAG_COLLECTION_NAME)\n"
+                    f"  4. Clear the existing ChromaDB data"
+                )
 
         # Prepare data for Chroma
         ids = []
@@ -333,11 +399,14 @@ class LocalVectorStore(VectorStore):
         """Get collection statistics."""
         try:
             count = self._collection.count()
+            metadata = self._collection.metadata or {}
             return {
                 "collection_name": self.config.collection_name,
                 "total_chunks": count,
                 "persist_directory": self.config.persist_directory,
                 "distance_metric": self.config.distance_metric,
+                "embedding_dimension": metadata.get(EMBEDDING_DIMENSION_KEY),
+                "embedding_model": metadata.get(EMBEDDING_MODEL_KEY),
             }
         except Exception as e:
             log.error(f"Failed to get stats: {e}")
@@ -360,6 +429,29 @@ def create_vector_store(
         raise NotImplementedError("Cloudflare Vectorize not yet implemented")
     else:
         raise ValueError(f"Unknown vector store type: {store_type}")
+
+
+def create_vector_store_from_settings() -> VectorStore:
+    """
+    Create vector store with configuration from application settings.
+    Uses RAG_EMBEDDING_TIER to determine the correct embedding dimension.
+    """
+    from ..config import get_settings, get_embedding_model_name, get_embedding_dimension
+    
+    settings = get_settings()
+    
+    model_name = get_embedding_model_name()
+    expected_dim = get_embedding_dimension(model_name)
+    
+    config = VectorStoreConfig(
+        persist_directory=settings.RAG_VECTOR_STORE_DIR,
+        collection_name=settings.RAG_COLLECTION_NAME,
+        distance_metric=settings.RAG_DISTANCE_METRIC,
+        expected_embedding_dimension=expected_dim,
+        embedding_model_name=model_name,
+    )
+    
+    return LocalVectorStore(config)
 
 
 # Export

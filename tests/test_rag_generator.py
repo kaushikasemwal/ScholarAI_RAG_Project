@@ -1,6 +1,6 @@
 """
 test_rag_generator.py — Grounded Generator Tests
-=================================================
+================================================
 """
 
 import sys
@@ -34,9 +34,13 @@ class TestGeneratorConfig:
     def test_default_config(self):
         config = GeneratorConfig()
         assert config.max_context_chunks == 5
-        assert config.temperature == 0.7
+        assert config.temperature == 0.3
         assert config.difficulty == "medium"
         assert config.topic_focus == "the key concepts"
+        assert config.max_new_tokens == 64
+        assert config.num_beams == 2
+        assert config.do_sample == False
+        assert config.max_retries == 2
 
     def test_custom_config(self):
         config = GeneratorConfig(
@@ -92,7 +96,8 @@ class TestFLANT5Generator:
             mock_tokenizer.return_value = {
                 "input_ids": Mock()
             }
-            mock_tokenizer.decode.return_value = "Generated question?"
+            # Return a valid question that passes validation (>= 10 words, not generic)
+            mock_tokenizer.decode.return_value = "How do generative models learn to create new content effectively?"
             
             # Setup model mock
             mock_model.generate.return_value = [Mock()]
@@ -119,7 +124,7 @@ class TestFLANT5Generator:
         
         mock_tokenizer.assert_called_once()
         mock_model.generate.assert_called_once()
-        assert result == "Generated question?"
+        assert result == "How do generative models learn to create new content effectively?"
 
 
 class TestGroundedQuizGenerator:
@@ -174,38 +179,31 @@ class TestGroundedQuizGenerator:
         mock_tokenizer = Mock()
         mock_get_t5.return_value = (mock_model, mock_tokenizer)
         
-        # Mock tokenizer
+        # Mock tokenizer for question generation
         mock_tokenizer.return_value = {"input_ids": Mock()}
-        mock_tokenizer.decode.return_value = '''
-        {
-            "question": "What is machine learning?",
-            "options": [
-                "A subset of AI",
-                "A programming language",
-                "A database",
-                "An operating system"
-            ],
-            "correct_answer": "A subset of AI",
-            "explanation": "The context states ML is a subset of AI."
-        }
-        '''
+        # Return a valid question (>= 10 words)
+        mock_tokenizer.decode.return_value = "How do generative models learn to create new content effectively?"
         mock_model.generate.return_value = [Mock()]
         
-        config = GeneratorConfig()
-        generator = GroundedQuizGenerator(config)
-        
-        result = generator.generate_grounded_question(
-            retrieved_documents=sample_docs,
-            topic_focus="machine learning",
-            difficulty="medium"
-        )
-        
-        assert result.success is True
-        assert result.question is not None
-        assert result.question.question == "What is machine learning?"
-        assert result.question.correct_answer == "A subset of AI"
-        assert len(result.provenance) == 2
-        assert result.provenance[0]["document_id"] == "doc-1"
+        # Mock the answer validation to pass
+        with patch('backend.rag.generator._validate_answer_support', return_value=(True, 0.8, "Machine learning is a subset of artificial intelligence.")):
+            with patch('backend.rag.generator._extract_answer_from_context', return_value="By learning patterns in data"):
+                with patch('backend.rag.generator._generate_distractors', return_value=["By memorizing training data", "By random guessing", "By copying existing content"]):
+                    config = GeneratorConfig()
+                    generator = GroundedQuizGenerator(config)
+                    
+                    result = generator.generate_grounded_question(
+                        retrieved_documents=sample_docs,
+                        topic_focus="machine learning",
+                        difficulty="medium"
+                    )
+                    
+                    assert result.success is True
+                    assert result.question is not None
+                    assert result.question.question == "How do generative models learn to create new content effectively?"
+                    assert result.question.correct_answer == "By learning patterns in data"
+                    assert len(result.provenance) == 2
+                    assert result.provenance[0]["document_id"] == "doc-1"
 
     @patch('backend.rag.generator.get_t5')
     def test_generate_parsing_failure(self, mock_get_t5, sample_docs):
@@ -214,7 +212,8 @@ class TestGroundedQuizGenerator:
         mock_get_t5.return_value = (mock_model, mock_tokenizer)
         
         mock_tokenizer.return_value = {"input_ids": Mock()}
-        mock_tokenizer.decode.return_value = "This is not valid JSON output"
+        # Return a generic question that fails validation
+        mock_tokenizer.decode.return_value = "Which of the following is true according to the passage?"
         mock_model.generate.return_value = [Mock()]
         
         config = GeneratorConfig()
@@ -226,7 +225,7 @@ class TestGroundedQuizGenerator:
         )
         
         assert result.success is False
-        assert "parsing" in result.error.lower() or "parse" in result.error.lower()
+        assert "generic" in result.error.lower() or "validation" in result.error.lower()
 
     @patch('backend.rag.generator.get_t5')
     def test_generate_model_failure(self, mock_get_t5, sample_docs):
@@ -249,27 +248,23 @@ class TestGroundedQuizGenerator:
         mock_get_t5.return_value = (mock_model, mock_tokenizer)
         
         mock_tokenizer.return_value = {"input_ids": Mock()}
-        mock_tokenizer.decode.return_value = '''
-        {
-            "question": "What is ML?",
-            "options": ["A", "B", "C", "D"],
-            "correct_answer": "A",
-            "explanation": "Test"
-        }
-        '''
+        mock_tokenizer.decode.return_value = "How do generative models learn to create new content effectively?"
         mock_model.generate.return_value = [Mock()]
         
-        config = GeneratorConfig()
-        generator = GroundedQuizGenerator(config)
-        
-        results = generator.generate_multiple(
-            retrieved_documents=sample_docs,
-            count=3,
-            topic_focus="machine learning"
-        )
-        
-        assert len(results) == 3
-        assert all(r.success for r in results)
+        with patch('backend.rag.generator._validate_answer_support', return_value=(True, 0.8, "Machine learning is a subset of artificial intelligence.")):
+            with patch('backend.rag.generator._extract_answer_from_context', return_value="By learning patterns in data"):
+                with patch('backend.rag.generator._generate_distractors', return_value=["By memorizing training data", "By random guessing", "By copying existing content"]):
+                    config = GeneratorConfig()
+                    generator = GroundedQuizGenerator(config)
+                    
+                    results = generator.generate_multiple(
+                        retrieved_documents=sample_docs,
+                        count=3,
+                        topic_focus="machine learning"
+                    )
+                    
+                    assert len(results) == 3
+                    assert all(r.success for r in results)
 
 
 class TestConvenienceFunctions:
@@ -292,27 +287,23 @@ class TestConvenienceFunctions:
         mock_get_t5.return_value = (mock_model, mock_tokenizer)
         
         mock_tokenizer.return_value = {"input_ids": Mock()}
-        mock_tokenizer.decode.return_value = '''
-        {
-            "question": "What is ML?",
-            "options": ["A", "B", "C", "D"],
-            "correct_answer": "A",
-            "explanation": "Test"
-        }
-        '''
+        mock_tokenizer.decode.return_value = "How do generative models learn to create new content effectively?"
         mock_model.generate.return_value = [Mock()]
         
-        docs = [MockDoc("ML is a subset of AI", {"page_number": 1, "chunk_id": "c1"})]
-        
-        result = generate_grounded_question(
-            retrieved_documents=docs,
-            topic_focus="machine learning",
-            difficulty="easy",
-            max_context_chunks=3
-        )
-        
-        assert result.success is True
-        assert result.question.question == "What is ML?"
+        with patch('backend.rag.generator._validate_answer_support', return_value=(True, 0.8, "Machine learning is a subset of artificial intelligence.")):
+            with patch('backend.rag.generator._extract_answer_from_context', return_value="By learning patterns in data"):
+                with patch('backend.rag.generator._generate_distractors', return_value=["By memorizing training data", "By random guessing", "By copying existing content"]):
+                    docs = [MockDoc("ML is a subset of AI", {"page_number": 1, "chunk_id": "c1"})]
+                    
+                    result = generate_grounded_question(
+                        retrieved_documents=docs,
+                        topic_focus="machine learning",
+                        difficulty="easy",
+                        max_context_chunks=3
+                    )
+                    
+                    assert result.success is True
+                    assert result.question.question == "How do generative models learn to create new content effectively?"
 
 
 class TestContextFormattingInGenerator:

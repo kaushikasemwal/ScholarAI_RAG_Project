@@ -132,11 +132,13 @@ def extract_provenance(
     provenance = []
     for doc in documents:
         metadata = doc.metadata
+        page_num = metadata.get("page_number", metadata.get("slide_number"))
         provenance.append({
             "document_id": metadata.get("document_id"),
             "source_filename": metadata.get("source_filename"),
             "file_type": metadata.get("file_type"),
-            "page_or_slide": metadata.get("page_number", metadata.get("slide_number")),
+            "page_number": page_num,
+            "page_or_slide": page_num,  # Backward compatibility
             "chunk_id": metadata.get("chunk_id"),
             "chunk_type": metadata.get("chunk_type"),
             "similarity_score": metadata.get("similarity_score"),

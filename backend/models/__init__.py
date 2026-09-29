@@ -189,8 +189,11 @@ def register_default_models() -> ModelManager:
     """
     manager = get_model_manager()
     
-    # SBERT (BGE-small) - shared between summarizer and quiz generator
-    manager.register("sbert", lambda: _load_sbert())
+    # SBERT embeddings - separate keys for quality and speed tiers
+    manager.register("sbert_quality", lambda: _load_sbert_quality())
+    manager.register("sbert_speed", lambda: _load_sbert_speed())
+    # Backward compatibility: "sbert" defaults to quality
+    manager.register("sbert", lambda: _load_sbert_quality())
     
     # Pegasus summarization
     manager.register("pegasus", lambda: _load_pegasus())
@@ -212,15 +215,16 @@ register_default_models()
 # ─── PRIVATE LOADER FUNCTIONS ────────────────────────────────────
 
 def _load_sbert():
-    """Load BGE sentence transformer (base or small based on config)."""
+    """Load BGE sentence transformer (base or small based on RAG embedding tier)."""
     from sentence_transformers import SentenceTransformer
     from ..config import get_settings
     settings = get_settings()
     
-    if settings.MODEL_TIER == "speed":
-        model_name = settings.SBERT_MODEL_LIGHT
+    # RAG_EMBEDDING_TIER controls embedding model selection (independent of generation tier)
+    if settings.RAG_EMBEDDING_TIER == "speed":
+        model_name = settings.RAG_EMBEDDING_MODEL_LIGHT
     else:
-        model_name = settings.SBERT_MODEL
+        model_name = settings.RAG_EMBEDDING_MODEL
     
     log.info(f"Loading SBERT model: {model_name}…")
     return SentenceTransformer(model_name)
@@ -232,7 +236,8 @@ def _load_pegasus():
     from ..config import get_settings
     settings = get_settings()
     
-    if settings.MODEL_TIER == "speed":
+    # Summarization uses the generation tier (same as T5)
+    if settings.RAG_GENERATION_TIER == "speed":
         model_name = settings.PEGASUS_MODEL_LIGHT
     else:
         model_name = settings.PEGASUS_MODEL
@@ -249,10 +254,10 @@ def _load_t5():
     from ..config import get_settings
     settings = get_settings()
     
-    if settings.MODEL_TIER == "speed":
-        model_name = settings.T5_MODEL_LIGHT
+    if settings.RAG_GENERATION_TIER == "speed":
+        model_name = settings.RAG_GENERATION_MODEL_LIGHT
     else:
-        model_name = settings.T5_MODEL
+        model_name = settings.RAG_GENERATION_MODEL
     
     log.info(f"Loading QG model: {model_name}…")
     tokenizer = T5Tokenizer.from_pretrained(model_name)
@@ -266,6 +271,14 @@ def _load_autoencoder(input_dim: int = 768):
     from .autoencoder import SemanticAutoencoder
     from ..config import get_settings
     settings = get_settings()
+    
+    # Autoencoder input dimension must match the embedding dimension
+    # Use RAG_EMBEDDING_TIER to determine the correct dimension
+    if settings.RAG_EMBEDDING_TIER == "speed":
+        input_dim = settings.RAG_EMBEDDING_DIMENSION_LIGHT
+    else:
+        input_dim = settings.RAG_EMBEDDING_DIMENSION
+    
     latent_dim = settings.AUTOENCODER_LATENT_DIM
     ae = SemanticAutoencoder(input_dim=input_dim, latent_dim=latent_dim)
     ae.try_load_weights()
@@ -274,9 +287,31 @@ def _load_autoencoder(input_dim: int = 768):
 
 # ─── CONVENIENCE FUNCTIONS ───────────────────────────────────────
 
-def get_sbert():
-    """Get SBERT model (BGE-small)."""
-    return get_model_manager().get("sbert")
+def _load_sbert_quality():
+    """Load BGE sentence transformer (base - 768 dim)."""
+    from sentence_transformers import SentenceTransformer
+    from ..config import get_settings
+    settings = get_settings()
+    model_name = settings.RAG_EMBEDDING_MODEL
+    log.info(f"Loading SBERT model (quality): {model_name}…")
+    return SentenceTransformer(model_name)
+
+
+def _load_sbert_speed():
+    """Load BGE sentence transformer (small - 384 dim)."""
+    from sentence_transformers import SentenceTransformer
+    from ..config import get_settings
+    settings = get_settings()
+    model_name = settings.RAG_EMBEDDING_MODEL_LIGHT
+    log.info(f"Loading SBERT model (speed): {model_name}…")
+    return SentenceTransformer(model_name)
+
+
+def get_sbert(tier: str = "quality"):
+    """Get SBERT model (BGE-base or BGE-small based on tier)."""
+    if tier == "speed":
+        return get_model_manager().get("sbert_speed")
+    return get_model_manager().get("sbert_quality")
 
 
 def get_pegasus() -> Tuple[Any, Any]:

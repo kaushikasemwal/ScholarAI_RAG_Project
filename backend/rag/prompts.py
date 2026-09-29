@@ -108,12 +108,46 @@ OUTPUT FORMAT (JSON):
 }}"""
 
 
+# Minimal T5-optimized prompt: simple labeled format with clear example
+T5_GROUNDED_MCQ_PROMPT = """CONTEXT:
+{context}
+
+TASK: Generate a {difficulty} multiple-choice question about {topic_focus} based ONLY on the context above.
+
+OUTPUT FORMAT (copy exactly, each field on its own line):
+QUESTION: [your question]
+A: [option A]
+B: [option B]
+C: [option C]
+D: [option D]
+ANSWER: [A/B/C/D]
+EXPLANATION: [brief explanation citing context]
+
+EXAMPLE:
+CONTEXT: A document states that Topic X has property Y and was introduced in year Z.
+QUESTION: What property does the document state about Topic X?
+A: Property Y
+B: Property A
+C: Property B
+D: Property C
+ANSWER: A
+EXPLANATION: The context explicitly states that Topic X has property Y.
+
+If context is insufficient, output:
+QUESTION: INSUFFICIENT_CONTEXT
+
+Now generate your response:
+
+QUESTION:"""
+
+
 def get_prompt_template(template_name: str = "grounded_qg") -> str:
     """Get a prompt template by name."""
     templates = {
         "grounded_qg": GROUNDED_QG_PROMPT_TEMPLATE,
         "simple": SIMPLE_GROUNDED_QG_PROMPT,
         "distractor_aware": DISTRACTOR_AWARE_PROMPT,
+        "t5_grounded_mcq": T5_GROUNDED_MCQ_PROMPT,
     }
     return templates.get(template_name, GROUNDED_QG_PROMPT_TEMPLATE)
 
@@ -134,12 +168,21 @@ def format_prompt(
         difficulty: "easy", "medium", or "hard"
         template_name: Which prompt template to use
         system_prompt: Optional custom system prompt
-    
+     
     Returns:
         Formatted prompt string
     """
     template = get_prompt_template(template_name)
     sys_prompt = system_prompt or GROUNDED_QG_SYSTEM_PROMPT
+    
+    # For T5-optimized template, don't use system prompt
+    if template_name == "t5_grounded_mcq":
+        return template.format(
+            context=context,
+            topic_focus=topic_focus,
+            difficulty=difficulty
+        )
+    
     return template.format(
         system_prompt=sys_prompt,
         context=context,

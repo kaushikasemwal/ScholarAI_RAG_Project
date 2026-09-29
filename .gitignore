@@ -29,6 +29,9 @@ chroma_db/
 .env.*
 !.env.example
 
+# Firebase
+frontend/firebase-config.js
+
 # Secrets
 models/encryption.key
 *.key
@@ -62,3 +65,6 @@ Thumbs.db
 *.log
 *.tmp
 *.temp
+
+# Phase development reports (temporary)
+_PHASE_REPORTS_TEMP/

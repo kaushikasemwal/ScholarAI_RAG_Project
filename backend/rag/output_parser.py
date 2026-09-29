@@ -103,6 +103,11 @@ class GroundedOutputParser:
         result = self._try_parse_simple(text)
         if result.success:
             return result
+
+        # Try labeled format (T5-friendly)
+        result = self._try_parse_labeled(text)
+        if result.success:
+            return result
         
         return ParseResult(
             success=False,
@@ -184,7 +189,201 @@ class GroundedOutputParser:
             return ParseResult(success=True, question=q, raw_output=text)
         except ValidationError as e:
             return ParseResult(success=False, error=f"Validation error: {e}", raw_output=text)
-    
+
+    def _try_parse_labeled(self, text: str) -> ParseResult:
+        """Try to parse T5-friendly labeled format:
+        
+        QUESTION: <question>
+        A: <option A>
+        B: <option B>
+        C: <option C>
+        D: <option D>
+        ANSWER: <exact correct option text>
+        EXPLANATION: <explanation>
+        
+        Also accepts compact format without line breaks:
+        QUESTION: <q> A: <a> B: <b> C: <c> D: <d> ANSWER: <ans> EXPLANATION: <exp>
+        
+        Also accepts the compact format FLAN-T5 actually produces:
+        Question: <q> Options:A <a> B <b> C <c> D <d> Answer:<letter>
+        
+        Also accepts:
+        - "Options:A <text> B <text> C <text> D <text> Answer:<letter>" format
+        - "Answer:<letter>" where letter maps to option
+        - Missing EXPLANATION (will be generated from context)
+        
+        Also accepts ANSWER: A (letter) which maps to the first option.
+        """
+        if not text or not text.strip():
+            return ParseResult(success=False, error="Empty model output", raw_output=text)
+        
+        import re
+        text_single = text.replace('\n', ' ').strip()
+        
+        question = None
+        options = {}
+        correct_answer = None
+        explanation = None
+        
+        # Try to extract QUESTION (case-insensitive) - handles "Question:" or "QUESTION:"
+        q_match = re.search(r'QUESTION:\s*(.+?)(?:\s*(?:OPTIONS?:|A:|B:|C:|D:|ANSWER:|Answer:|$))', text_single, re.IGNORECASE)
+        if q_match:
+            question = q_match.group(1).strip()
+        
+        # Try to extract options from "Options:A ... B ... C ... D ..." format (case-insensitive)
+        # This handles the compact format FLAN-T5 produces: "Options:A textB textC textD text"
+        opt_match = re.search(r'OPTIONS?:\s*(.+?)(?:\s*ANSWER:|\s*Answer:|\s*$)', text_single, re.IGNORECASE)
+        if opt_match:
+            opt_text = opt_match.group(1).strip()
+            # Parse A, B, C, D from the options text using a more robust approach
+            # The format is: A <text>B <text>C <text>D <text> where letters are delimiters
+            # We'll split by the option markers (A, B, C, D) that appear at word boundaries
+            
+            # First try to find each option by looking for the letter followed by content
+            # Use a regex that captures from each letter to the next letter or end
+            for opt_letter in ['A', 'B', 'C', 'D']:
+                # Pattern: letter followed by content until next letter (A/B/C/D) or ANSWER
+                if opt_letter == 'A':
+                    pattern = r'A\s*(.+?)(?=\s*[BCD]\s*|$|ANSWER|Answer)'
+                elif opt_letter == 'B':
+                    pattern = r'B\s*(.+?)(?=\s*[CD]\s*|$|ANSWER|Answer)'
+                elif opt_letter == 'C':
+                    pattern = r'C\s*(.+?)(?=\s*D\s*|$|ANSWER|Answer)'
+                else:  # D
+                    pattern = r'D\s*(.+?)(?=\s*$|ANSWER|Answer)'
+                
+                m = re.search(pattern, opt_text, re.IGNORECASE)
+                if m:
+                    options[opt_letter] = m.group(1).strip()
+        
+        # If Options: format didn't work, try "A: ... B: ... C: ... D: ..." format directly in text
+        if len(options) < 4:
+            for opt_letter in ['A', 'B', 'C', 'D']:
+                if opt_letter not in options:
+                    # Try "A: text" format
+                    pattern = rf'{opt_letter}:\s*(.+?)(?:\s+[BCD]:|\s*ANSWER:|\s*Answer:|\s*EXPLANATION:|\s*$)'
+                    m = re.search(pattern, text_single, re.IGNORECASE)
+                    if m:
+                        options[opt_letter] = m.group(1).strip()
+                    else:
+                        # Try "A text" format (space after letter) - but only if it looks like an option start
+                        # Look for letter at word boundary followed by content
+                        pattern = rf'(?:^|\s){opt_letter}\s+(.+?)(?:\s+[BCD]\s+|\s*ANSWER:|\s*Answer:|\s*EXPLANATION:|\s*$)'
+                        m = re.search(pattern, text_single, re.IGNORECASE)
+                        if m:
+                            options[opt_letter] = m.group(1).strip()
+        
+        # Extract ANSWER (case-insensitive, could be letter or full text)
+        ans_match = re.search(r'ANSWER:\s*(.+?)(?:\s*EXPLANATION:|\s*$)', text_single, re.IGNORECASE)
+        if not ans_match:
+            ans_match = re.search(r'Answer:\s*(.+?)(?:\s*EXPLANATION:|\s*$)', text_single, re.IGNORECASE)
+        if ans_match:
+            correct_answer = ans_match.group(1).strip()
+        
+        # Extract EXPLANATION (case-insensitive)
+        exp_match = re.search(r'EXPLANATION:\s*(.+)$', text_single, re.IGNORECASE)
+        if exp_match:
+            explanation = exp_match.group(1).strip()
+        
+        # Check for INSUFFICIENT_CONTEXT marker
+        if question and question.upper().strip() == "INSUFFICIENT_CONTEXT":
+            return ParseResult(
+                success=False,
+                error="Insufficient context: model indicated insufficient information",
+                raw_output=text
+            )
+        
+        # Validate required fields
+        if not question:
+            return ParseResult(success=False, error="Missing QUESTION field", raw_output=text)
+        
+        if len(options) != 4 or not all(k in options for k in ['A', 'B', 'C', 'D']):
+            return ParseResult(success=False, error=f"Missing or incomplete options (need A, B, C, D), got: {list(options.keys())}", raw_output=text)
+        
+        if not correct_answer:
+            return ParseResult(success=False, error="Missing ANSWER field", raw_output=text)
+        
+        # EXPLANATION is optional - generate a default if missing
+        if not explanation:
+            explanation = f"Based on the context provided, the correct answer is {correct_answer}."
+        
+        # Build options list in order
+        options_list = [options['A'], options['B'], options['C'], options['D']]
+        
+        # Resolve correct_answer: if it's a letter (A/B/C/D), map to option text
+        if correct_answer.upper() in ['A', 'B', 'C', 'D']:
+            correct_text = options[correct_answer.upper()]
+        else:
+            # Exact text match
+            correct_text = correct_answer
+            # Verify it matches one of the options (case-insensitive)
+            if not any(correct_text.lower() == opt.lower() for opt in options_list):
+                return ParseResult(
+                    success=False, 
+                    error=f"ANSWER '{correct_text}' does not match any option", 
+                    raw_output=text
+                )
+        
+        try:
+            q = GroundedQuizQuestion(
+                question=question,
+                options=options_list,
+                correct_answer=correct_text,
+                explanation=explanation
+            )
+            return ParseResult(success=True, question=q, raw_output=text)
+        except ValidationError as e:
+            return ParseResult(success=False, error=f"Validation error: {e}", raw_output=text)
+        
+        # Check for INSUFFICIENT_CONTEXT marker
+        if question and question.upper().strip() == "INSUFFICIENT_CONTEXT":
+            return ParseResult(
+                success=False,
+                error="Insufficient context: model indicated insufficient information",
+                raw_output=text
+            )
+        
+        # Validate required fields
+        if not question:
+            return ParseResult(success=False, error="Missing QUESTION field", raw_output=text)
+        
+        if len(options) != 4 or not all(k in options for k in ['A', 'B', 'C', 'D']):
+            return ParseResult(success=False, error=f"Missing or incomplete options (need A, B, C, D), got: {list(options.keys())}", raw_output=text)
+        
+        if not correct_answer:
+            return ParseResult(success=False, error="Missing ANSWER field", raw_output=text)
+        
+        if not explanation:
+            return ParseResult(success=False, error="Missing EXPLANATION field", raw_output=text)
+        
+        # Build options list in order
+        options_list = [options['A'], options['B'], options['C'], options['D']]
+        
+        # Resolve correct_answer: if it's a letter (A/B/C/D), map to option text
+        if correct_answer.upper() in ['A', 'B', 'C', 'D']:
+            correct_text = options[correct_answer.upper()]
+        else:
+            # Exact text match
+            correct_text = correct_answer
+            # Verify it matches one of the options (case-insensitive)
+            if not any(correct_text.lower() == opt.lower() for opt in options_list):
+                return ParseResult(
+                    success=False, 
+                    error=f"ANSWER '{correct_text}' does not match any option", 
+                    raw_output=text
+                )
+        
+        try:
+            q = GroundedQuizQuestion(
+                question=question,
+                options=options_list,
+                correct_answer=correct_text,
+                explanation=explanation
+            )
+            return ParseResult(success=True, question=q, raw_output=text)
+        except ValidationError as e:
+            return ParseResult(success=False, error=f"Validation error: {e}", raw_output=text)
+
     def _attempt_recovery(self, data: dict, raw_text: str) -> ParseResult:
         """Attempt to recover a valid question from partially invalid data."""
         # Try to fix common issues
