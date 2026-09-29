@@ -39,7 +39,7 @@ nltk.download('stopwords'); \
 nltk.download('averaged_perceptron_tagger')"
 
 # Pre-download models so first request isn't slow
-# Use MODEL_TIER=balanced for smaller models on HF Spaces (CPU Basic)
+# Use quality tier models (BGE-base, FLAN-T5-large, BART-large-CNN)
 RUN python -c "\
 from sentence_transformers import SentenceTransformer; \
 SentenceTransformer('BAAI/bge-base-en-v1.5')" || true
@@ -67,7 +67,8 @@ USER appuser
 # HF Spaces requires port 7860
 EXPOSE 7860
 
-# Set model tier to balanced for CPU Basic tier (smaller models)
-ENV MODEL_TIER=balanced
+# Use quality tier models (BGE-base 768-dim, FLAN-T5-large, BART-large-CNN)
+ENV RAG_EMBEDDING_TIER=quality
+ENV RAG_GENERATION_TIER=quality
 
 CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]
